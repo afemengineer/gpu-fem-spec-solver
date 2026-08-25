@@ -6,6 +6,7 @@ option(GFSS_ENABLE_CUDA "Build CUDA instrumentation and GPU solver components" O
 option(GFSS_BUILD_TESTS "Build unit tests" ON)
 option(GFSS_CPU_AVX2 "Compile the optimized CPU stencil source with AVX2 on MSVC" OFF)
 option(GFSS_CPU_VEC_REPORT "Emit MSVC automatic-vectorization diagnostics for the CPU stencil source" OFF)
+option(GFSS_CPU_FAST_FP "Compile the optimized CPU stencil source with /fp:fast on MSVC" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +35,11 @@ if(MSVC)
     else()
         target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
         message(STATUS "CPU stencil using default MSVC x64 ISA target")
+    endif()
+
+    if(GFSS_CPU_FAST_FP)
+        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /fp:fast)
+        message(STATUS "CPU stencil fast floating-point semantics enabled")
     endif()
 
     if(GFSS_CPU_VEC_REPORT)
