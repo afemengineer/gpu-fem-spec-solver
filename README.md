@@ -38,21 +38,37 @@ Those begin at M1.
 
 ## Build — Windows + CUDA
 
-The development target is Windows with MSVC/Visual Studio 2026 Build Tools and CUDA.
-
-PowerShell:
+The development target is Windows with MSVC/Visual Studio 2026 Build Tools and CUDA. The PowerShell helper is designed to work from an ordinary VS Code terminal: it locates and imports the Visual Studio x64 build environment, finds `nvcc.exe`, configures the NMake CUDA build, targets the RTX 2080 SUPER (`sm_75`) by default, builds, runs tests, and prints GPU information.
 
 ```powershell
 .\scripts\configure_windows_cuda.ps1
 ```
 
-Or manually:
+A different CUDA architecture can be selected explicitly:
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 18 2026" -A x64 -DGFSS_ENABLE_CUDA=ON -DGFSS_BUILD_TESTS=ON
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-.\build\Release\gfss.exe info
+.\scripts\configure_windows_cuda.ps1 -CudaArch 75
+```
+
+The batch wrapper calls the same helper:
+
+```cmd
+scripts\configure_windows_cuda.bat
+```
+
+The Windows helper intentionally uses the `NMake Makefiles` generator rather than the Visual Studio CMake generator. This allows a minimal CUDA installation with a working `nvcc` + MSVC toolchain to build CUDA code without requiring NVIDIA's optional Visual Studio/MSBuild integration component.
+
+Manual equivalent, after initializing `vcvars64.bat`:
+
+```cmd
+cmake -S . -B build-cuda -G "NMake Makefiles" ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DGFSS_ENABLE_CUDA=ON ^
+  -DGFSS_BUILD_TESTS=ON ^
+  -DCMAKE_CUDA_ARCHITECTURES=75
+cmake --build build-cuda
+ctest --test-dir build-cuda --output-on-failure
+build-cuda\gfss.exe info
 ```
 
 CPU-only configuration:
