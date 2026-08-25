@@ -11,6 +11,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(gfss_core STATIC
     src/memory_model.cpp
+    src/hex8.cpp
+    src/structured_hex_mesh.cpp
+    src/cpu_elasticity.cpp
+    src/cpu_solver.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -20,6 +24,16 @@ if(MSVC)
     target_compile_options(gfss_core PRIVATE /W4 /permissive-)
 else()
     target_compile_options(gfss_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(gfss_core PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(gfss_core PUBLIC GFSS_HAS_OPENMP=1)
+    message(STATUS "OpenMP CPU baseline enabled")
+else()
+    target_compile_definitions(gfss_core PUBLIC GFSS_HAS_OPENMP=0)
+    message(WARNING "OpenMP was not found; CPU parallel operator will fall back to serial")
 endif()
 
 set(GFSS_APP_SOURCES src/main.cpp)
@@ -54,9 +68,26 @@ else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
 
+add_executable(gfss_cpu_operator_bench benchmarks/cpu_operator_bench.cpp)
+target_link_libraries(gfss_cpu_operator_bench PRIVATE gfss_core)
+target_include_directories(gfss_cpu_operator_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
+
     add_executable(gfss_memory_model_test tests/memory_model_test.cpp)
     target_link_libraries(gfss_memory_model_test PRIVATE gfss_core)
     add_test(NAME memory_model COMMAND gfss_memory_model_test)
+
+    add_executable(gfss_hex8_test tests/hex8_test.cpp)
+    target_link_libraries(gfss_hex8_test PRIVATE gfss_core)
+    add_test(NAME hex8_reference COMMAND gfss_hex8_test)
+
+    add_executable(gfss_cpu_operator_test tests/cpu_operator_test.cpp)
+    target_link_libraries(gfss_cpu_operator_test PRIVATE gfss_core)
+    add_test(NAME cpu_operator COMMAND gfss_cpu_operator_test)
+
+    add_executable(gfss_cpu_solver_test tests/cpu_solver_test.cpp)
+    target_link_libraries(gfss_cpu_solver_test PRIVATE gfss_core)
+    add_test(NAME cpu_solver COMMAND gfss_cpu_solver_test)
 endif()
