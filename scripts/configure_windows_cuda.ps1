@@ -49,7 +49,8 @@ function Import-MsvcEnvironment {
 
   # A .bat file cannot modify its parent PowerShell process directly. Run it in
   # cmd.exe, dump the resulting environment, and import those variables here.
-  $lines = & cmd.exe /d /s /c "`"call `"$vcvars`" >nul && set`""
+  $vcvarsCommand = "call `"$vcvars`" >nul && set"
+  $lines = & cmd.exe /d /s /c $vcvarsCommand
   Assert-LastExitCode "Visual Studio environment initialization"
 
   foreach ($line in $lines) {
