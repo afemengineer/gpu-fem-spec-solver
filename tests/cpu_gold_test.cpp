@@ -1,13 +1,34 @@
 #include "gfss/cpu_elasticity.hpp"
 #include "gfss/cpu_gold.hpp"
+#include "gfss/cpu_gold_padded.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
 namespace {
+
+class AlignedFloatBuffer {
+public:
+    explicit AlignedFloatBuffer(std::size_t count)
+        : storage_(count + 16U, 0.0f) {
+        const auto raw = reinterpret_cast<std::uintptr_t>(storage_.data());
+        const auto aligned =
+            (raw + static_cast<std::uintptr_t>(63U)) &
+            ~static_cast<std::uintptr_t>(63U);
+        data_ = reinterpret_cast<float*>(aligned);
+    }
+
+    float* data() noexcept { return data_; }
+    const float* data() const noexcept { return data_; }
+
+private:
+    std::vector<float> storage_;
+    float* data_{nullptr};
+};
 
 template <typename A, typename B>
 double relative_max_difference(const A& a, const B& b) {
@@ -51,10 +72,32 @@ int main() {
                                   yx.data(), yy.data(), yz.data());
     gfss::soa_to_aos_fp32(yx.data(), yy.data(), yz.data(), nodes, y_gold.data());
 
+    const auto padded_layout = gfss::make_cpu_gold_padded_layout_fp32(mesh);
+    const auto padded_stencil =
+        gfss::build_cpu_gold_padded_stencil_fp32(mesh, material, padded_layout);
+    AlignedFloatBuffer pux(padded_layout.storage_nodes);
+    AlignedFloatBuffer puy(padded_layout.storage_nodes);
+    AlignedFloatBuffer puz(padded_layout.storage_nodes);
+    AlignedFloatBuffer pyx(padded_layout.storage_nodes);
+    AlignedFloatBuffer pyy(padded_layout.storage_nodes);
+    AlignedFloatBuffer pyz(padded_layout.storage_nodes);
+    std::vector<float> y_padded(ndof);
+    gfss::aos_to_padded_soa_fp32(
+        mesh, padded_layout, x.data(), pux.data(), puy.data(), puz.data());
+    gfss::apply_cpu_gold_padded_soa_fp32(
+        mesh, padded_stencil,
+        pux.data(), puy.data(), puz.data(),
+        pyx.data(), pyy.data(), pyz.data());
+    gfss::padded_soa_to_aos_fp32(
+        mesh, padded_layout,
+        pyx.data(), pyy.data(), pyz.data(), y_padded.data());
+
     const auto oracle = gfss::apply_matrix_free_openmp(mesh, material, xd);
     const double rel = relative_max_difference(oracle, y_gold);
-    if (rel >= 2.0e-5) {
-        std::cerr << "CPU Gold differs from FP64 oracle: rel_max=" << rel << '\n';
+    const double padded_rel = relative_max_difference(oracle, y_padded);
+    if (rel >= 2.0e-5 || padded_rel >= 2.0e-5) {
+        std::cerr << "CPU Gold differs from FP64 oracle: rel_max=" << rel
+                  << " padded_rel_max=" << padded_rel << '\n';
         return 1;
     }
 
@@ -69,8 +112,25 @@ int main() {
         return 2;
     }
 
+    std::vector<float> first_padded(ndof);
+    gfss::padded_soa_to_aos_fp32(
+        mesh, padded_layout,
+        pyx.data(), pyy.data(), pyz.data(), first_padded.data());
+    gfss::apply_cpu_gold_padded_soa_fp32(
+        mesh, padded_stencil,
+        pux.data(), puy.data(), puz.data(),
+        pyx.data(), pyy.data(), pyz.data());
+    gfss::padded_soa_to_aos_fp32(
+        mesh, padded_layout,
+        pyx.data(), pyy.data(), pyz.data(), y_padded.data());
+    if (y_padded != first_padded) {
+        std::cerr << "padded CPU Gold result is not bitwise repeatable\n";
+        return 3;
+    }
+
     std::cout << "CPU Gold SoA operator check passed; avx2="
               << (gfss::cpu_gold_avx2_enabled() ? "on" : "off")
-              << " rel_max=" << rel << '\n';
+              << " rel_max=" << rel
+              << " padded_rel_max=" << padded_rel << '\n';
     return 0;
 }
