@@ -10,7 +10,17 @@ namespace gfss {
 
 struct CudaOperatorTiming {
     double best_ms{0.0};
+    double median_ms{0.0};
     double mean_ms{0.0};
+    double p95_ms{0.0};
+
+    double best_zero_ms{0.0};
+    double median_zero_ms{0.0};
+    double mean_zero_ms{0.0};
+
+    double best_kernel_ms{0.0};
+    double median_kernel_ms{0.0};
+    double mean_kernel_ms{0.0};
 };
 
 struct CudaOperatorResult {
