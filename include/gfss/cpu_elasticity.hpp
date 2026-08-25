@@ -16,6 +16,12 @@ std::vector<double> apply_matrix_free(const StructuredHexMesh& mesh,
                                       const Material& material,
                                       const std::vector<double>& x);
 
+std::vector<double> apply_matrix_free_openmp(const StructuredHexMesh& mesh,
+                                             const Material& material,
+                                             const std::vector<double>& x);
+
+int cpu_openmp_max_threads() noexcept;
+
 std::vector<std::uint64_t> clamped_x0_dofs(const StructuredHexMesh& mesh);
 
 void apply_symmetric_dirichlet(DenseMatrix& matrix,
