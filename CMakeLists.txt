@@ -11,6 +11,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(gfss_core STATIC
     src/memory_model.cpp
+    src/hex8.cpp
+    src/structured_hex_mesh.cpp
+    src/cpu_elasticity.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -56,7 +59,16 @@ endif()
 
 if(GFSS_BUILD_TESTS)
     enable_testing()
+
     add_executable(gfss_memory_model_test tests/memory_model_test.cpp)
     target_link_libraries(gfss_memory_model_test PRIVATE gfss_core)
     add_test(NAME memory_model COMMAND gfss_memory_model_test)
+
+    add_executable(gfss_hex8_test tests/hex8_test.cpp)
+    target_link_libraries(gfss_hex8_test PRIVATE gfss_core)
+    add_test(NAME hex8_reference COMMAND gfss_hex8_test)
+
+    add_executable(gfss_cpu_operator_test tests/cpu_operator_test.cpp)
+    target_link_libraries(gfss_cpu_operator_test PRIVATE gfss_core)
+    add_test(NAME cpu_operator COMMAND gfss_cpu_operator_test)
 endif()
