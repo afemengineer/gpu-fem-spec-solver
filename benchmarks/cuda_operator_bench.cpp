@@ -14,6 +14,11 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 
+struct CpuTiming {
+    double best_ms{0.0};
+    double mean_ms{0.0};
+};
+
 std::uint32_t parse_u32(const char* text) {
     const auto value = std::stoul(text);
     if (value == 0 || value > 1000000UL) {
@@ -28,6 +33,28 @@ int parse_positive_int(const char* text) {
         throw std::invalid_argument("repeat count must be positive");
     }
     return value;
+}
+
+CpuTiming benchmark_cpu_openmp(const gfss::StructuredHexMesh& mesh,
+                               const gfss::Material& material,
+                               const std::vector<double>& x,
+                               int repeats,
+                               std::vector<double>& last_result) {
+    // One warmup, matching the steady-state intent of the CUDA timing.
+    last_result = gfss::apply_matrix_free_openmp(mesh, material, x);
+
+    double best_ms = 1.0e300;
+    double total_ms = 0.0;
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        const auto start = Clock::now();
+        last_result = gfss::apply_matrix_free_openmp(mesh, material, x);
+        const auto stop = Clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+        best_ms = std::min(best_ms, ms);
+        total_ms += ms;
+    }
+
+    return CpuTiming{best_ms, total_ms / static_cast<double>(repeats)};
 }
 
 }  // namespace
@@ -57,16 +84,14 @@ int main(int argc, char** argv) {
                   << " elements=" << mesh.element_count()
                   << " dofs=" << mesh.dof_count() << '\n'
                   << "openmp_max_threads=" << gfss::cpu_openmp_max_threads() << '\n'
-                  << "gpu_repeats=" << repeats << '\n';
+                  << "repeats=" << repeats << '\n'
+                  << "note: CPU path is currently FP64; GPU path is FP32\n"
+                  << "note: CPU steady-state timing still includes output-vector allocation; GPU allocation/H2D/D2H are excluded\n";
 
-        // Time one optimized CPU/OpenMP apply using the same regular-element path.
-        (void)gfss::apply_matrix_free_openmp(mesh, material, xd);
-        const auto cpu_start = Clock::now();
-        const auto cpu = gfss::apply_matrix_free_openmp(mesh, material, xd);
-        const auto cpu_stop = Clock::now();
-        const double cpu_ms =
-            std::chrono::duration<double, std::milli>(cpu_stop - cpu_start).count();
-        const double cpu_mdof_s = static_cast<double>(mesh.dof_count()) / (cpu_ms * 1.0e3);
+        std::vector<double> cpu;
+        const auto cpu_timing = benchmark_cpu_openmp(mesh, material, xd, repeats, cpu);
+        const double cpu_mdof_s =
+            static_cast<double>(mesh.dof_count()) / (cpu_timing.best_ms * 1.0e3);
 
         const auto gpu = gfss::apply_matrix_free_cuda_atomic(mesh, material, xf, repeats);
         const double gpu_mdof_s =
@@ -80,12 +105,13 @@ int main(int argc, char** argv) {
         }
         const double rel_max = max_abs / std::max(1.0, scale);
 
-        std::cout << "cpu_openmp: ms=" << cpu_ms
+        std::cout << "cpu_openmp_fp64: best_ms=" << cpu_timing.best_ms
+                  << " mean_ms=" << cpu_timing.mean_ms
                   << " MDOF/s=" << cpu_mdof_s << '\n'
-                  << "gpu_atomic: best_ms=" << gpu.timing.best_ms
+                  << "gpu_atomic_fp32: best_ms=" << gpu.timing.best_ms
                   << " mean_ms=" << gpu.timing.mean_ms
                   << " MDOF/s=" << gpu_mdof_s
-                  << " speedup_vs_cpu=" << (cpu_ms / gpu.timing.best_ms) << "x\n"
+                  << " provisional_speedup_vs_fp64_cpu=" << (cpu_timing.best_ms / gpu.timing.best_ms) << "x\n"
                   << "gpu_device_vectors=" << (static_cast<double>(gpu.device_bytes) / (1024.0 * 1024.0))
                   << " MiB\n"
                   << std::scientific
