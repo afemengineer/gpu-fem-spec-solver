@@ -1,5 +1,6 @@
 #include "gfss/cpu_elasticity.hpp"
 #include "gfss/cpu_gold.hpp"
+#include "gfss/cpu_gold_padded.hpp"
 #include "gfss/cpu_stencil.hpp"
 
 #include <algorithm>
@@ -21,6 +22,25 @@ struct TimingStats {
     double median_ms{0.0};
     double mean_ms{0.0};
     double p95_ms{0.0};
+};
+
+class AlignedFloatBuffer {
+public:
+    explicit AlignedFloatBuffer(std::size_t count)
+        : storage_(count + 16U, 0.0f) {
+        const auto raw = reinterpret_cast<std::uintptr_t>(storage_.data());
+        const auto aligned =
+            (raw + static_cast<std::uintptr_t>(63U)) &
+            ~static_cast<std::uintptr_t>(63U);
+        data_ = reinterpret_cast<float*>(aligned);
+    }
+
+    float* data() noexcept { return data_; }
+    const float* data() const noexcept { return data_; }
+
+private:
+    std::vector<float> storage_;
+    float* data_{nullptr};
 };
 
 std::uint32_t parse_u32(const char* text) {
@@ -135,18 +155,52 @@ int main(int argc, char** argv) {
             },
             repeats);
 
+        // Padded Gold is deliberately allocated after the original Gold timing
+        // so the established baseline remains measured under the same state as
+        // before this experiment.
+        const auto padded_layout = gfss::make_cpu_gold_padded_layout_fp32(mesh);
+        const auto padded_stencil =
+            gfss::build_cpu_gold_padded_stencil_fp32(mesh, material, padded_layout);
+        AlignedFloatBuffer pux(padded_layout.storage_nodes);
+        AlignedFloatBuffer puy(padded_layout.storage_nodes);
+        AlignedFloatBuffer puz(padded_layout.storage_nodes);
+        AlignedFloatBuffer pyx(padded_layout.storage_nodes);
+        AlignedFloatBuffer pyy(padded_layout.storage_nodes);
+        AlignedFloatBuffer pyz(padded_layout.storage_nodes);
+        std::vector<float> y_padded_aos(ndof);
+        gfss::aos_to_padded_soa_fp32(
+            mesh, padded_layout, xf.data(), pux.data(), puy.data(), puz.data());
+
+        const auto padded_timing = time_repeated(
+            [&] {
+                gfss::apply_cpu_gold_padded_soa_fp32(
+                    mesh, padded_stencil,
+                    pux.data(), puy.data(), puz.data(),
+                    pyx.data(), pyy.data(), pyz.data());
+            },
+            repeats);
+
         // All conversion and correctness work stays outside the timed region.
         gfss::soa_to_aos_fp32(yx.data(), yy.data(), yz.data(), nodes, y_gold_aos.data());
+        gfss::padded_soa_to_aos_fp32(
+            mesh, padded_layout,
+            pyx.data(), pyy.data(), pyz.data(), y_padded_aos.data());
         const auto oracle = gfss::apply_matrix_free_openmp(mesh, material, xd);
         const double aos_rel = relative_max_difference(oracle, y_aos);
         const double gold_rel = relative_max_difference(oracle, y_gold_aos);
+        const double padded_rel = relative_max_difference(oracle, y_padded_aos);
 
         const double aos_mdof_s =
             static_cast<double>(mesh.dof_count()) / (aos_timing.median_ms * 1.0e3);
         const double gold_mdof_s =
             static_cast<double>(mesh.dof_count()) / (gold_timing.median_ms * 1.0e3);
+        const double padded_mdof_s =
+            static_cast<double>(mesh.dof_count()) / (padded_timing.median_ms * 1.0e3);
         const double state_mib =
             static_cast<double>(6ULL * nodes * sizeof(float)) / (1024.0 * 1024.0);
+        const double padded_state_mib =
+            static_cast<double>(6ULL * padded_layout.storage_nodes * sizeof(float)) /
+            (1024.0 * 1024.0);
 
         std::cout << std::fixed << std::setprecision(3);
         std::cout << "GFSS CPU Gold FP32 SoA AVX2/FMA benchmark\n"
@@ -160,16 +214,21 @@ int main(int argc, char** argv) {
                   << "timing excludes stencil setup, AoS<->SoA conversion, allocation, and oracle audit\n";
         print_stats("cpu_aos_fp32", aos_timing, mesh.dof_count());
         print_stats("cpu_gold_soa_fp32", gold_timing, mesh.dof_count());
+        print_stats("cpu_gold_padded_soa_fp32", padded_timing, mesh.dof_count());
         std::cout << "gold_speedup_vs_aos=" << (gold_mdof_s / aos_mdof_s) << "x\n"
+                  << "padded_speedup_vs_gold=" << (padded_mdof_s / gold_mdof_s) << "x\n"
                   << "gold_soa_input_output_state=" << state_mib << " MiB\n"
+                  << "padded_row_stride_floats=" << padded_layout.row_stride << '\n'
+                  << "padded_soa_input_output_state=" << padded_state_mib << " MiB\n"
                   << std::scientific
                   << "aos_vs_oracle_rel_max=" << aos_rel << '\n'
-                  << "gold_vs_oracle_rel_max=" << gold_rel << '\n';
+                  << "gold_vs_oracle_rel_max=" << gold_rel << '\n'
+                  << "padded_gold_vs_oracle_rel_max=" << padded_rel << '\n';
 
         if (!gfss::cpu_gold_avx2_enabled()) {
             std::cerr << "WARNING: CPU Gold was built without explicit AVX2; use GFSS_CPU_AVX2=ON for the Gold result\n";
         }
-        if (aos_rel >= 2.0e-5 || gold_rel >= 2.0e-5) {
+        if (aos_rel >= 2.0e-5 || gold_rel >= 2.0e-5 || padded_rel >= 2.0e-5) {
             std::cerr << "ERROR: CPU Gold benchmark failed numerical audit\n";
             return 2;
         }
