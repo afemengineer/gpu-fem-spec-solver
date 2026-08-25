@@ -4,9 +4,9 @@ project(gpu_fem_spec_solver VERSION 0.1.0 LANGUAGES CXX)
 
 option(GFSS_ENABLE_CUDA "Build CUDA instrumentation and GPU solver components" ON)
 option(GFSS_BUILD_TESTS "Build unit tests" ON)
-option(GFSS_CPU_AVX2 "Compile the optimized CPU stencil source with AVX2 on MSVC" OFF)
-option(GFSS_CPU_VEC_REPORT "Emit MSVC automatic-vectorization diagnostics for the CPU stencil source" OFF)
-option(GFSS_CPU_FAST_FP "Compile the optimized CPU stencil source with /fp:fast on MSVC" OFF)
+option(GFSS_CPU_AVX2 "Compile optimized CPU stencil/Gold sources with AVX2/FMA" OFF)
+option(GFSS_CPU_VEC_REPORT "Emit MSVC automatic-vectorization diagnostics for CPU stencil sources" OFF)
+option(GFSS_CPU_FAST_FP "Compile optimized CPU stencil/Gold sources with fast floating-point semantics" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,41 +19,59 @@ add_library(gfss_core STATIC
     src/cpu_elasticity.cpp
     src/cpu_solver.cpp
     src/cpu_stencil.cpp
+    src/cpu_gold.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(gfss_core PUBLIC cxx_std_17)
 
+if(GFSS_CPU_AVX2)
+    target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=1)
+else()
+    target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
+endif()
+
 if(MSVC)
     target_compile_options(gfss_core PRIVATE /W4 /permissive-)
 
-    set(GFSS_CPU_STENCIL_COMPILE_OPTIONS "")
+    set(GFSS_CPU_OPT_COMPILE_OPTIONS "")
     if(GFSS_CPU_AVX2)
-        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /arch:AVX2)
-        target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=1)
-        message(STATUS "CPU stencil AVX2 code generation enabled")
+        list(APPEND GFSS_CPU_OPT_COMPILE_OPTIONS /arch:AVX2)
+        message(STATUS "CPU stencil/Gold AVX2+FMA code generation enabled")
     else()
-        target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
-        message(STATUS "CPU stencil using default MSVC x64 ISA target")
+        message(STATUS "CPU stencil/Gold using default MSVC x64 ISA target")
     endif()
 
     if(GFSS_CPU_FAST_FP)
-        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /fp:fast)
-        message(STATUS "CPU stencil fast floating-point semantics enabled")
+        list(APPEND GFSS_CPU_OPT_COMPILE_OPTIONS /fp:fast)
+        message(STATUS "CPU stencil/Gold fast floating-point semantics enabled")
     endif()
 
     if(GFSS_CPU_VEC_REPORT)
-        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /Qvec-report:2)
-        message(STATUS "MSVC CPU stencil vectorization diagnostics enabled")
+        list(APPEND GFSS_CPU_OPT_COMPILE_OPTIONS /Qvec-report:2)
+        message(STATUS "MSVC CPU vectorization diagnostics enabled")
     endif()
 
-    if(GFSS_CPU_STENCIL_COMPILE_OPTIONS)
-        set_source_files_properties(src/cpu_stencil.cpp PROPERTIES
-            COMPILE_OPTIONS "${GFSS_CPU_STENCIL_COMPILE_OPTIONS}")
+    if(GFSS_CPU_OPT_COMPILE_OPTIONS)
+        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp PROPERTIES
+            COMPILE_OPTIONS "${GFSS_CPU_OPT_COMPILE_OPTIONS}")
     endif()
 else()
     target_compile_options(gfss_core PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
+
+    set(GFSS_CPU_OPT_COMPILE_OPTIONS "")
+    if(GFSS_CPU_AVX2)
+        list(APPEND GFSS_CPU_OPT_COMPILE_OPTIONS -mavx2 -mfma)
+        message(STATUS "CPU stencil/Gold AVX2+FMA code generation enabled")
+    endif()
+    if(GFSS_CPU_FAST_FP)
+        list(APPEND GFSS_CPU_OPT_COMPILE_OPTIONS -ffast-math)
+        message(STATUS "CPU stencil/Gold fast floating-point semantics enabled")
+    endif()
+    if(GFSS_CPU_OPT_COMPILE_OPTIONS)
+        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp PROPERTIES
+            COMPILE_OPTIONS "${GFSS_CPU_OPT_COMPILE_OPTIONS}")
+    endif()
 endif()
 
 find_package(OpenMP QUIET)
@@ -115,6 +133,10 @@ add_executable(gfss_cpu_stencil_bench benchmarks/cpu_stencil_bench.cpp)
 target_link_libraries(gfss_cpu_stencil_bench PRIVATE gfss_core)
 target_include_directories(gfss_cpu_stencil_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_cpu_gold_bench benchmarks/cpu_gold_bench.cpp)
+target_link_libraries(gfss_cpu_gold_bench PRIVATE gfss_core)
+target_include_directories(gfss_cpu_gold_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
@@ -137,6 +159,10 @@ if(GFSS_BUILD_TESTS)
     add_executable(gfss_cpu_stencil_test tests/cpu_stencil_test.cpp)
     target_link_libraries(gfss_cpu_stencil_test PRIVATE gfss_core)
     add_test(NAME cpu_stencil COMMAND gfss_cpu_stencil_test)
+
+    add_executable(gfss_cpu_gold_test tests/cpu_gold_test.cpp)
+    target_link_libraries(gfss_cpu_gold_test PRIVATE gfss_core)
+    add_test(NAME cpu_gold COMMAND gfss_cpu_gold_test)
 
     if(GFSS_HAS_CUDA)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
