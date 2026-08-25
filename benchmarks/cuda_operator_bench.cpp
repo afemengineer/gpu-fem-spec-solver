@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,7 +17,9 @@ using Clock = std::chrono::steady_clock;
 
 struct CpuTiming {
     double best_ms{0.0};
+    double median_ms{0.0};
     double mean_ms{0.0};
+    double p95_ms{0.0};
 };
 
 std::uint32_t parse_u32(const char* text) {
@@ -35,26 +38,38 @@ int parse_positive_int(const char* text) {
     return value;
 }
 
+double percentile(std::vector<double> samples, double p) {
+    std::sort(samples.begin(), samples.end());
+    const double position = p * static_cast<double>(samples.size() - 1);
+    const auto lower = static_cast<std::size_t>(position);
+    const auto upper = std::min(lower + 1, samples.size() - 1);
+    const double fraction = position - static_cast<double>(lower);
+    return samples[lower] * (1.0 - fraction) + samples[upper] * fraction;
+}
+
 CpuTiming benchmark_cpu_openmp(const gfss::StructuredHexMesh& mesh,
                                const gfss::Material& material,
                                const std::vector<double>& x,
                                int repeats,
                                std::vector<double>& last_result) {
-    // One warmup, matching the steady-state intent of the CUDA timing.
     last_result = gfss::apply_matrix_free_openmp(mesh, material, x);
 
-    double best_ms = 1.0e300;
-    double total_ms = 0.0;
+    std::vector<double> samples;
+    samples.reserve(static_cast<std::size_t>(repeats));
     for (int repeat = 0; repeat < repeats; ++repeat) {
         const auto start = Clock::now();
         last_result = gfss::apply_matrix_free_openmp(mesh, material, x);
         const auto stop = Clock::now();
-        const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
-        best_ms = std::min(best_ms, ms);
-        total_ms += ms;
+        samples.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
     }
 
-    return CpuTiming{best_ms, total_ms / static_cast<double>(repeats)};
+    CpuTiming timing;
+    timing.best_ms = *std::min_element(samples.begin(), samples.end());
+    timing.median_ms = percentile(samples, 0.50);
+    timing.mean_ms = std::accumulate(samples.begin(), samples.end(), 0.0) /
+                     static_cast<double>(samples.size());
+    timing.p95_ms = percentile(samples, 0.95);
+    return timing;
 }
 
 }  // namespace
@@ -91,11 +106,11 @@ int main(int argc, char** argv) {
         std::vector<double> cpu;
         const auto cpu_timing = benchmark_cpu_openmp(mesh, material, xd, repeats, cpu);
         const double cpu_mdof_s =
-            static_cast<double>(mesh.dof_count()) / (cpu_timing.best_ms * 1.0e3);
+            static_cast<double>(mesh.dof_count()) / (cpu_timing.median_ms * 1.0e3);
 
         const auto gpu = gfss::apply_matrix_free_cuda_atomic(mesh, material, xf, repeats);
         const double gpu_mdof_s =
-            static_cast<double>(mesh.dof_count()) / (gpu.timing.best_ms * 1.0e3);
+            static_cast<double>(mesh.dof_count()) / (gpu.timing.median_ms * 1.0e3);
 
         double max_abs = 0.0;
         double scale = 0.0;
@@ -106,12 +121,23 @@ int main(int argc, char** argv) {
         const double rel_max = max_abs / std::max(1.0, scale);
 
         std::cout << "cpu_openmp_fp64: best_ms=" << cpu_timing.best_ms
+                  << " median_ms=" << cpu_timing.median_ms
                   << " mean_ms=" << cpu_timing.mean_ms
-                  << " MDOF/s=" << cpu_mdof_s << '\n'
-                  << "gpu_atomic_fp32: best_ms=" << gpu.timing.best_ms
+                  << " p95_ms=" << cpu_timing.p95_ms
+                  << " median_MDOF/s=" << cpu_mdof_s << '\n'
+                  << "gpu_atomic_fp32_total: best_ms=" << gpu.timing.best_ms
+                  << " median_ms=" << gpu.timing.median_ms
                   << " mean_ms=" << gpu.timing.mean_ms
-                  << " MDOF/s=" << gpu_mdof_s
-                  << " provisional_speedup_vs_fp64_cpu=" << (cpu_timing.best_ms / gpu.timing.best_ms) << "x\n"
+                  << " p95_ms=" << gpu.timing.p95_ms
+                  << " median_MDOF/s=" << gpu_mdof_s
+                  << " provisional_speedup_vs_fp64_cpu="
+                  << (cpu_timing.median_ms / gpu.timing.median_ms) << "x\n"
+                  << "gpu_zero: best_ms=" << gpu.timing.best_zero_ms
+                  << " median_ms=" << gpu.timing.median_zero_ms
+                  << " mean_ms=" << gpu.timing.mean_zero_ms << '\n'
+                  << "gpu_kernel: best_ms=" << gpu.timing.best_kernel_ms
+                  << " median_ms=" << gpu.timing.median_kernel_ms
+                  << " mean_ms=" << gpu.timing.mean_kernel_ms << '\n'
                   << "gpu_device_vectors=" << (static_cast<double>(gpu.device_bytes) / (1024.0 * 1024.0))
                   << " MiB\n"
                   << std::scientific
