@@ -86,32 +86,72 @@ void apply_interior_vector8(const CpuGoldStencilFp32& stencil,
     __m256 out_y = _mm256_setzero_ps();
     __m256 out_z = _mm256_setzero_ps();
 
-    for (std::uint8_t e = 0; e < stencil.interior_count; ++e) {
-        const std::int64_t neighbor = center_node + stencil.interior_node_offsets[e];
-        const std::size_t n = static_cast<std::size_t>(neighbor);
+    for (std::uint8_t e = 0; e < stencil.diag_count; ++e) {
+        const auto& entry = stencil.diag[e];
+        const std::size_t n = static_cast<std::size_t>(center_node + entry.offset);
         const __m256 x0 = _mm256_loadu_ps(ux + n);
         const __m256 x1 = _mm256_loadu_ps(uy + n);
         const __m256 x2 = _mm256_loadu_ps(uz + n);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b00), x0, out_x);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b11), x1, out_y);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b22), x2, out_z);
+    }
 
-        const __m256 b00 = _mm256_set1_ps(stencil.interior_coeff[0][e]);
-        const __m256 b01 = _mm256_set1_ps(stencil.interior_coeff[1][e]);
-        const __m256 b02 = _mm256_set1_ps(stencil.interior_coeff[2][e]);
-        const __m256 b10 = _mm256_set1_ps(stencil.interior_coeff[3][e]);
-        const __m256 b11 = _mm256_set1_ps(stencil.interior_coeff[4][e]);
-        const __m256 b12 = _mm256_set1_ps(stencil.interior_coeff[5][e]);
-        const __m256 b20 = _mm256_set1_ps(stencil.interior_coeff[6][e]);
-        const __m256 b21 = _mm256_set1_ps(stencil.interior_coeff[7][e]);
-        const __m256 b22 = _mm256_set1_ps(stencil.interior_coeff[8][e]);
+    for (std::uint8_t e = 0; e < stencil.edge_xy_count; ++e) {
+        const auto& entry = stencil.edge_xy[e];
+        const std::size_t n = static_cast<std::size_t>(center_node + entry.offset);
+        const __m256 x0 = _mm256_loadu_ps(ux + n);
+        const __m256 x1 = _mm256_loadu_ps(uy + n);
+        const __m256 x2 = _mm256_loadu_ps(uz + n);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b00), x0, out_x);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b01), x1, out_x);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b10), x0, out_y);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b11), x1, out_y);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b22), x2, out_z);
+    }
 
-        out_x = _mm256_fmadd_ps(b00, x0, out_x);
-        out_x = _mm256_fmadd_ps(b01, x1, out_x);
-        out_x = _mm256_fmadd_ps(b02, x2, out_x);
-        out_y = _mm256_fmadd_ps(b10, x0, out_y);
-        out_y = _mm256_fmadd_ps(b11, x1, out_y);
-        out_y = _mm256_fmadd_ps(b12, x2, out_y);
-        out_z = _mm256_fmadd_ps(b20, x0, out_z);
-        out_z = _mm256_fmadd_ps(b21, x1, out_z);
-        out_z = _mm256_fmadd_ps(b22, x2, out_z);
+    for (std::uint8_t e = 0; e < stencil.edge_xz_count; ++e) {
+        const auto& entry = stencil.edge_xz[e];
+        const std::size_t n = static_cast<std::size_t>(center_node + entry.offset);
+        const __m256 x0 = _mm256_loadu_ps(ux + n);
+        const __m256 x1 = _mm256_loadu_ps(uy + n);
+        const __m256 x2 = _mm256_loadu_ps(uz + n);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b00), x0, out_x);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b02), x2, out_x);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b11), x1, out_y);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b20), x0, out_z);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b22), x2, out_z);
+    }
+
+    for (std::uint8_t e = 0; e < stencil.edge_yz_count; ++e) {
+        const auto& entry = stencil.edge_yz[e];
+        const std::size_t n = static_cast<std::size_t>(center_node + entry.offset);
+        const __m256 x0 = _mm256_loadu_ps(ux + n);
+        const __m256 x1 = _mm256_loadu_ps(uy + n);
+        const __m256 x2 = _mm256_loadu_ps(uz + n);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(entry.b00), x0, out_x);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b11), x1, out_y);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(entry.b12), x2, out_y);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b21), x1, out_z);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(entry.b22), x2, out_z);
+    }
+
+    for (std::uint8_t e = 0; e < stencil.corner_count; ++e) {
+        const auto& entry = stencil.corner[e];
+        const std::size_t n = static_cast<std::size_t>(center_node + entry.offset);
+        const __m256 x0 = _mm256_loadu_ps(ux + n);
+        const __m256 x1 = _mm256_loadu_ps(uy + n);
+        const __m256 x2 = _mm256_loadu_ps(uz + n);
+        const auto& b = entry.block;
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(b[0]), x0, out_x);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(b[1]), x1, out_x);
+        out_x = _mm256_fmadd_ps(_mm256_set1_ps(b[2]), x2, out_x);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(b[3]), x0, out_y);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(b[4]), x1, out_y);
+        out_y = _mm256_fmadd_ps(_mm256_set1_ps(b[5]), x2, out_y);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(b[6]), x0, out_z);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(b[7]), x1, out_z);
+        out_z = _mm256_fmadd_ps(_mm256_set1_ps(b[8]), x2, out_z);
     }
 
     const std::size_t c = static_cast<std::size_t>(center_node);
@@ -131,17 +171,46 @@ CpuGoldStencilFp32 build_cpu_gold_stencil_fp32(
 
     const std::int64_t sx = static_cast<std::int64_t>(mesh.nx) + 1;
     const std::int64_t sy = static_cast<std::int64_t>(mesh.ny) + 1;
-    result.interior_count = result.regular.counts[static_cast<std::size_t>(kInteriorClass)];
+    const auto interior_count = result.regular.counts[static_cast<std::size_t>(kInteriorClass)];
 
-    for (std::uint8_t e = 0; e < result.interior_count; ++e) {
-        const auto& entry = result.regular.entries[static_cast<std::size_t>(kInteriorClass)][e];
-        result.interior_node_offsets[e] =
-            static_cast<std::int64_t>(entry.dx) +
-            sx * (static_cast<std::int64_t>(entry.dy) +
-                  sy * static_cast<std::int64_t>(entry.dz));
-        for (std::size_t q = 0; q < 9; ++q) {
-            result.interior_coeff[q][e] = entry.block[q];
+    for (std::uint8_t e = 0; e < interior_count; ++e) {
+        const auto& src = result.regular.entries[static_cast<std::size_t>(kInteriorClass)][e];
+        const std::int64_t offset =
+            static_cast<std::int64_t>(src.dx) +
+            sx * (static_cast<std::int64_t>(src.dy) +
+                  sy * static_cast<std::int64_t>(src.dz));
+        const auto& b = src.block;
+
+        const int active_axes =
+            (src.dx != 0 ? 1 : 0) +
+            (src.dy != 0 ? 1 : 0) +
+            (src.dz != 0 ? 1 : 0);
+
+        if (active_axes <= 1) {
+            auto& dst = result.diag[result.diag_count++];
+            dst = CpuGoldDiagEntryFp32{offset, b[0], b[4], b[8]};
+        } else if (src.dz == 0) {
+            auto& dst = result.edge_xy[result.edge_xy_count++];
+            dst = CpuGoldEdgeXYEntryFp32{offset, b[0], b[1], b[3], b[4], b[8]};
+        } else if (src.dy == 0) {
+            auto& dst = result.edge_xz[result.edge_xz_count++];
+            dst = CpuGoldEdgeXZEntryFp32{offset, b[0], b[2], b[4], b[6], b[8]};
+        } else if (src.dx == 0) {
+            auto& dst = result.edge_yz[result.edge_yz_count++];
+            dst = CpuGoldEdgeYZEntryFp32{offset, b[0], b[4], b[5], b[7], b[8]};
+        } else {
+            auto& dst = result.corner[result.corner_count++];
+            dst.offset = offset;
+            dst.block = b;
         }
+    }
+
+    if (result.diag_count != result.diag.size() ||
+        result.edge_xy_count != result.edge_xy.size() ||
+        result.edge_xz_count != result.edge_xz.size() ||
+        result.edge_yz_count != result.edge_yz.size() ||
+        result.corner_count != result.corner.size()) {
+        throw std::runtime_error("unexpected regular HEX8 interior stencil topology");
     }
 
     return result;
