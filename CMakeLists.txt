@@ -26,6 +26,16 @@ else()
     target_compile_options(gfss_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(gfss_core PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(gfss_core PUBLIC GFSS_HAS_OPENMP=1)
+    message(STATUS "OpenMP CPU baseline enabled")
+else()
+    target_compile_definitions(gfss_core PUBLIC GFSS_HAS_OPENMP=0)
+    message(WARNING "OpenMP was not found; CPU parallel operator will fall back to serial")
+endif()
+
 set(GFSS_APP_SOURCES src/main.cpp)
 
 if(GFSS_ENABLE_CUDA)
@@ -57,6 +67,10 @@ if(GFSS_HAS_CUDA)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
+
+add_executable(gfss_cpu_operator_bench benchmarks/cpu_operator_bench.cpp)
+target_link_libraries(gfss_cpu_operator_bench PRIVATE gfss_core)
+target_include_directories(gfss_cpu_operator_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(GFSS_BUILD_TESTS)
     enable_testing()
