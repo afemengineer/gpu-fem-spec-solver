@@ -54,15 +54,20 @@ int main() {
 
     const auto ya = dense_apply(assembled, x);
     const auto ymf = gfss::apply_matrix_free(mesh, material, x);
+    const auto yomp = gfss::apply_matrix_free_openmp(mesh, material, x);
 
     double max_abs = 0.0;
+    double omp_max_abs = 0.0;
     double scale = 0.0;
     for (std::size_t i = 0; i < x.size(); ++i) {
         max_abs = std::max(max_abs, std::abs(ya[i] - ymf[i]));
+        omp_max_abs = std::max(omp_max_abs, std::abs(ymf[i] - yomp[i]));
         scale = std::max(scale, std::abs(ya[i]));
     }
     require(max_abs <= 5.0e-11 * std::max(1.0, scale),
             "matrix-free A*x must match assembled K*x");
+    require(omp_max_abs <= 1.0e-10 * std::max(1.0, scale),
+            "OpenMP matrix-free A*x must match serial matrix-free A*x");
 
     auto constrained_matrix = assembled;
     std::vector<double> rhs(x.size(), 1.0);
@@ -83,6 +88,6 @@ int main() {
                 "constrained operator row must act as identity");
     }
 
-    std::cout << "CPU assembled/matrix-free operator checks passed\n";
+    std::cout << "CPU assembled/serial/OpenMP matrix-free operator checks passed\n";
     return 0;
 }
