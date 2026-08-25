@@ -1,6 +1,7 @@
 #include "gfss/cpu_elasticity.hpp"
 #include "gfss/cpu_gold.hpp"
 #include "gfss/cpu_gold_padded.hpp"
+#include "gfss/cpu_gold_window.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -62,6 +63,7 @@ int main() {
     }
 
     const auto gold_stencil = gfss::build_cpu_gold_stencil_fp32(mesh, material);
+    const auto window_stencil = gfss::build_cpu_gold_window_stencil_fp32(mesh, material);
     std::vector<float> ux(nodes), uy(nodes), uz(nodes);
     std::vector<float> yx(nodes), yy(nodes), yz(nodes);
     std::vector<float> y_gold(ndof);
@@ -71,6 +73,13 @@ int main() {
                                   ux.data(), uy.data(), uz.data(),
                                   yx.data(), yy.data(), yz.data());
     gfss::soa_to_aos_fp32(yx.data(), yy.data(), yz.data(), nodes, y_gold.data());
+
+    std::vector<float> wyx(nodes), wyy(nodes), wyz(nodes);
+    std::vector<float> y_window(ndof);
+    gfss::apply_cpu_gold_window_soa_fp32(mesh, window_stencil,
+                                         ux.data(), uy.data(), uz.data(),
+                                         wyx.data(), wyy.data(), wyz.data());
+    gfss::soa_to_aos_fp32(wyx.data(), wyy.data(), wyz.data(), nodes, y_window.data());
 
     const auto padded_layout = gfss::make_cpu_gold_padded_layout_fp32(mesh);
     const auto padded_stencil =
@@ -94,9 +103,11 @@ int main() {
 
     const auto oracle = gfss::apply_matrix_free_openmp(mesh, material, xd);
     const double rel = relative_max_difference(oracle, y_gold);
+    const double window_rel = relative_max_difference(oracle, y_window);
     const double padded_rel = relative_max_difference(oracle, y_padded);
-    if (rel >= 2.0e-5 || padded_rel >= 2.0e-5) {
+    if (rel >= 2.0e-5 || window_rel >= 2.0e-5 || padded_rel >= 2.0e-5) {
         std::cerr << "CPU Gold differs from FP64 oracle: rel_max=" << rel
+                  << " window_rel_max=" << window_rel
                   << " padded_rel_max=" << padded_rel << '\n';
         return 1;
     }
@@ -112,6 +123,17 @@ int main() {
         return 2;
     }
 
+    const auto first_wyx = wyx;
+    const auto first_wyy = wyy;
+    const auto first_wyz = wyz;
+    gfss::apply_cpu_gold_window_soa_fp32(mesh, window_stencil,
+                                         ux.data(), uy.data(), uz.data(),
+                                         wyx.data(), wyy.data(), wyz.data());
+    if (wyx != first_wyx || wyy != first_wyy || wyz != first_wyz) {
+        std::cerr << "window CPU Gold result is not bitwise repeatable\n";
+        return 3;
+    }
+
     std::vector<float> first_padded(ndof);
     gfss::padded_soa_to_aos_fp32(
         mesh, padded_layout,
@@ -125,12 +147,13 @@ int main() {
         pyx.data(), pyy.data(), pyz.data(), y_padded.data());
     if (y_padded != first_padded) {
         std::cerr << "padded CPU Gold result is not bitwise repeatable\n";
-        return 3;
+        return 4;
     }
 
     std::cout << "CPU Gold SoA operator check passed; avx2="
               << (gfss::cpu_gold_avx2_enabled() ? "on" : "off")
               << " rel_max=" << rel
+              << " window_rel_max=" << window_rel
               << " padded_rel_max=" << padded_rel << '\n';
     return 0;
 }
