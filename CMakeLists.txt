@@ -15,6 +15,7 @@ add_library(gfss_core STATIC
     src/structured_hex_mesh.cpp
     src/cpu_elasticity.cpp
     src/cpu_solver.cpp
+    src/cpu_stencil.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -81,6 +82,10 @@ add_executable(gfss_cpu_operator_bench benchmarks/cpu_operator_bench.cpp)
 target_link_libraries(gfss_cpu_operator_bench PRIVATE gfss_core)
 target_include_directories(gfss_cpu_operator_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_cpu_stencil_bench benchmarks/cpu_stencil_bench.cpp)
+target_link_libraries(gfss_cpu_stencil_bench PRIVATE gfss_core)
+target_include_directories(gfss_cpu_stencil_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
@@ -99,6 +104,10 @@ if(GFSS_BUILD_TESTS)
     add_executable(gfss_cpu_solver_test tests/cpu_solver_test.cpp)
     target_link_libraries(gfss_cpu_solver_test PRIVATE gfss_core)
     add_test(NAME cpu_solver COMMAND gfss_cpu_solver_test)
+
+    add_executable(gfss_cpu_stencil_test tests/cpu_stencil_test.cpp)
+    target_link_libraries(gfss_cpu_stencil_test PRIVATE gfss_core)
+    add_test(NAME cpu_stencil COMMAND gfss_cpu_stencil_test)
 
     if(GFSS_HAS_CUDA)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
