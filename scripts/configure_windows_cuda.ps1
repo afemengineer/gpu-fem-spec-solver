@@ -43,6 +43,16 @@ if (-not $nvcc) {
 Write-Host "Using CUDA compiler: $nvcc"
 & $nvcc --version
 
+$cachePath = Join-Path $PWD "build\CMakeCache.txt"
+if (Test-Path $cachePath) {
+  $cache = Get-Content $cachePath -Raw
+  if ($cache -match 'CMAKE_CUDA_COMPILER[^\r\n]*NOTFOUND' -or
+      $cache -match 'GFSS_ENABLE_CUDA:BOOL=OFF') {
+    Write-Host "Removing stale CPU-only/CUDA-NOTFOUND CMake cache..."
+    Remove-Item -Recurse -Force (Join-Path $PWD "build")
+  }
+}
+
 $nvccCMake = $nvcc -replace '\\', '/'
 
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
