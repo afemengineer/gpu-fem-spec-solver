@@ -22,6 +22,8 @@ constexpr std::array<std::array<int, 3>, 8> kLocalNodePos{{
     {{0, 1, 1}},
 }};
 
+constexpr int kInteriorClass = 13;  // class_index(1, 1, 1)
+
 int class_index(int cx, int cy, int cz) {
     return cx + 3 * (cy + 3 * cz);
 }
@@ -123,6 +125,67 @@ int axis_class(std::int64_t coordinate, std::int64_t max_coordinate) {
 }
 
 template <typename T>
+inline void apply_one_node(std::int64_t i,
+                           std::int64_t j,
+                           std::int64_t k,
+                           std::int64_t sx,
+                           std::int64_t sy,
+                           const NodeStencilEntry<T>* entries,
+                           int count,
+                           const T* x,
+                           T* y) {
+    T y0 = T{};
+    T y1 = T{};
+    T y2 = T{};
+
+    for (int e = 0; e < count; ++e) {
+        const auto& entry = entries[e];
+        const std::int64_t node =
+            (i + entry.dx) + sx * ((j + entry.dy) + sy * (k + entry.dz));
+        const std::size_t base = static_cast<std::size_t>(3 * node);
+        const T x0 = x[base + 0];
+        const T x1 = x[base + 1];
+        const T x2 = x[base + 2];
+        const auto& b = entry.block;
+        y0 += b[0] * x0 + b[1] * x1 + b[2] * x2;
+        y1 += b[3] * x0 + b[4] * x1 + b[5] * x2;
+        y2 += b[6] * x0 + b[7] * x1 + b[8] * x2;
+    }
+
+    const std::int64_t node = i + sx * (j + sy * k);
+    const std::size_t base = static_cast<std::size_t>(3 * node);
+    y[base + 0] = y0;
+    y[base + 1] = y1;
+    y[base + 2] = y2;
+}
+
+template <typename T>
+inline void apply_boundary_node(std::int64_t i,
+                                std::int64_t j,
+                                std::int64_t k,
+                                std::int64_t nx,
+                                std::int64_t ny,
+                                std::int64_t nz,
+                                std::int64_t sx,
+                                std::int64_t sy,
+                                const RegularNodeStencil<T>& stencil,
+                                const T* x,
+                                T* y) {
+    const int cls = class_index(axis_class(i, nx),
+                                axis_class(j, ny),
+                                axis_class(k, nz));
+    apply_one_node(i,
+                   j,
+                   k,
+                   sx,
+                   sy,
+                   stencil.entries[static_cast<std::size_t>(cls)].data(),
+                   static_cast<int>(stencil.counts[static_cast<std::size_t>(cls)]),
+                   x,
+                   y);
+}
+
+template <typename T>
 void apply_impl(const StructuredHexMesh& mesh,
                 const RegularNodeStencil<T>& stencil,
                 const T* x,
@@ -137,41 +200,63 @@ void apply_impl(const StructuredHexMesh& mesh,
     const std::int64_t sx = nx + 1;
     const std::int64_t sy = ny + 1;
 
+    // Hot path: almost all nodes in a large structured mesh are interior nodes.
+    // Use a fixed class and fixed 27-entry loop so the compiler sees no
+    // boundary classification or variable trip count in the dominant region.
+    if (nx >= 2 && ny >= 2 && nz >= 2) {
+        const auto* interior_entries =
+            stencil.entries[static_cast<std::size_t>(kInteriorClass)].data();
+
 #if GFSS_HAS_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-    for (std::int64_t k = 0; k <= nz; ++k) {
-        for (std::int64_t j = 0; j <= ny; ++j) {
-            for (std::int64_t i = 0; i <= nx; ++i) {
-                const int cls = class_index(axis_class(i, nx),
-                                            axis_class(j, ny),
-                                            axis_class(k, nz));
-                const auto count = stencil.counts[static_cast<std::size_t>(cls)];
-
-                T y0 = T{};
-                T y1 = T{};
-                T y2 = T{};
-                for (std::uint8_t e = 0; e < count; ++e) {
-                    const auto& entry = stencil.entries[static_cast<std::size_t>(cls)][e];
-                    const std::int64_t ni = i + entry.dx;
-                    const std::int64_t nj = j + entry.dy;
-                    const std::int64_t nk = k + entry.dz;
-                    const std::int64_t node = ni + sx * (nj + sy * nk);
-                    const std::size_t base = static_cast<std::size_t>(3 * node);
-                    const T x0 = x[base + 0];
-                    const T x1 = x[base + 1];
-                    const T x2 = x[base + 2];
-                    const auto& b = entry.block;
-                    y0 += b[0] * x0 + b[1] * x1 + b[2] * x2;
-                    y1 += b[3] * x0 + b[4] * x1 + b[5] * x2;
-                    y2 += b[6] * x0 + b[7] * x1 + b[8] * x2;
+        for (std::int64_t k = 1; k < nz; ++k) {
+            for (std::int64_t j = 1; j < ny; ++j) {
+                for (std::int64_t i = 1; i < nx; ++i) {
+                    apply_one_node(i, j, k, sx, sy, interior_entries, 27, x, y);
                 }
+            }
+        }
+    }
 
-                const std::int64_t node = i + sx * (j + sy * k);
-                const std::size_t base = static_cast<std::size_t>(3 * node);
-                y[base + 0] = y0;
-                y[base + 1] = y1;
-                y[base + 2] = y2;
+    // Boundary path. These six disjoint surface groups cover every boundary
+    // node exactly once and retain the generic face/edge/corner stencil logic.
+#if GFSS_HAS_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t j = 0; j <= ny; ++j) {
+        for (std::int64_t i = 0; i <= nx; ++i) {
+            apply_boundary_node(i, j, 0, nx, ny, nz, sx, sy, stencil, x, y);
+            if (nz > 0) {
+                apply_boundary_node(i, j, nz, nx, ny, nz, sx, sy, stencil, x, y);
+            }
+        }
+    }
+
+    if (nz >= 2) {
+#if GFSS_HAS_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (std::int64_t k = 1; k < nz; ++k) {
+            for (std::int64_t i = 0; i <= nx; ++i) {
+                apply_boundary_node(i, 0, k, nx, ny, nz, sx, sy, stencil, x, y);
+                if (ny > 0) {
+                    apply_boundary_node(i, ny, k, nx, ny, nz, sx, sy, stencil, x, y);
+                }
+            }
+        }
+    }
+
+    if (nz >= 2 && ny >= 2) {
+#if GFSS_HAS_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (std::int64_t k = 1; k < nz; ++k) {
+            for (std::int64_t j = 1; j < ny; ++j) {
+                apply_boundary_node(0, j, k, nx, ny, nz, sx, sy, stencil, x, y);
+                if (nx > 0) {
+                    apply_boundary_node(nx, j, k, nx, ny, nz, sx, sy, stencil, x, y);
+                }
             }
         }
     }
