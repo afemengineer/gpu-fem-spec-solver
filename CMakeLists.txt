@@ -20,6 +20,7 @@ add_library(gfss_core STATIC
     src/cpu_solver.cpp
     src/cpu_stencil.cpp
     src/cpu_gold.cpp
+    src/cpu_gold_padded.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -53,7 +54,7 @@ if(MSVC)
     endif()
 
     if(GFSS_CPU_OPT_COMPILE_OPTIONS)
-        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp PROPERTIES
+        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp src/cpu_gold_padded.cpp PROPERTIES
             COMPILE_OPTIONS "${GFSS_CPU_OPT_COMPILE_OPTIONS}")
     endif()
 else()
@@ -69,7 +70,7 @@ else()
         message(STATUS "CPU stencil/Gold fast floating-point semantics enabled")
     endif()
     if(GFSS_CPU_OPT_COMPILE_OPTIONS)
-        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp PROPERTIES
+        set_source_files_properties(src/cpu_stencil.cpp src/cpu_gold.cpp src/cpu_gold_padded.cpp PROPERTIES
             COMPILE_OPTIONS "${GFSS_CPU_OPT_COMPILE_OPTIONS}")
     endif()
 endif()
