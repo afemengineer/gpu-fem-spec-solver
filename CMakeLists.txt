@@ -4,6 +4,8 @@ project(gpu_fem_spec_solver VERSION 0.1.0 LANGUAGES CXX)
 
 option(GFSS_ENABLE_CUDA "Build CUDA instrumentation and GPU solver components" ON)
 option(GFSS_BUILD_TESTS "Build unit tests" ON)
+option(GFSS_CPU_AVX2 "Compile the optimized CPU stencil source with AVX2 on MSVC" OFF)
+option(GFSS_CPU_VEC_REPORT "Emit MSVC automatic-vectorization diagnostics for the CPU stencil source" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,8 +25,29 @@ target_compile_features(gfss_core PUBLIC cxx_std_17)
 
 if(MSVC)
     target_compile_options(gfss_core PRIVATE /W4 /permissive-)
+
+    set(GFSS_CPU_STENCIL_COMPILE_OPTIONS "")
+    if(GFSS_CPU_AVX2)
+        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /arch:AVX2)
+        target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=1)
+        message(STATUS "CPU stencil AVX2 code generation enabled")
+    else()
+        target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
+        message(STATUS "CPU stencil using default MSVC x64 ISA target")
+    endif()
+
+    if(GFSS_CPU_VEC_REPORT)
+        list(APPEND GFSS_CPU_STENCIL_COMPILE_OPTIONS /Qvec-report:2)
+        message(STATUS "MSVC CPU stencil vectorization diagnostics enabled")
+    endif()
+
+    if(GFSS_CPU_STENCIL_COMPILE_OPTIONS)
+        set_source_files_properties(src/cpu_stencil.cpp PROPERTIES
+            COMPILE_OPTIONS "${GFSS_CPU_STENCIL_COMPILE_OPTIONS}")
+    endif()
 else()
     target_compile_options(gfss_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_definitions(gfss_core PUBLIC GFSS_CPU_STENCIL_AVX2=0)
 endif()
 
 find_package(OpenMP QUIET)
