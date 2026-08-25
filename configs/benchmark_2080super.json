@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "name": "rtx2080super_capacity_baseline",
+  "problem": {
+    "physics": "3d_small_strain_linear_elasticity",
+    "element": "hex8_q1",
+    "mesh": "structured",
+    "youngs_modulus_pa": 210000000000.0,
+    "poisson_ratio": 0.3,
+    "boundary_condition": "cantilever_x0_fixed",
+    "load_case": "uniform_end_traction"
+  },
+  "solver": {
+    "outer": "pcg",
+    "relative_residual_tolerance": 1e-6,
+    "max_iterations": 2000,
+    "precision": "fp32",
+    "preconditioner": "jacobi"
+  },
+  "capacity": {
+    "device_memory_limit_gib": 8.0,
+    "minimum_free_reserve_mib": 512,
+    "candidate_cubic_elements_per_axis": [64, 96, 128, 160, 192, 224, 256]
+  },
+  "report": {
+    "record_peak_vram": true,
+    "record_kernel_time": true,
+    "record_end_to_end_time": true,
+    "record_true_residual": true
+  }
+}
