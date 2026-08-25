@@ -3,7 +3,12 @@
 #include "gfss/hex8.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace gfss {
 namespace {
@@ -18,6 +23,56 @@ void validate_vector_size(const StructuredHexMesh& mesh, const std::vector<doubl
     }
 }
 
+Hex8Matrix uniform_element_stiffness(const StructuredHexMesh& mesh,
+                                     const Material& material) {
+    if (mesh.nx == 0 || mesh.ny == 0 || mesh.nz == 0) {
+        throw std::invalid_argument("structured mesh dimensions must be non-zero");
+    }
+    return hex8_stiffness(mesh.element_coordinates(0, 0, 0), material);
+}
+
+Hex8Vector apply_element_matrix(const Hex8Matrix& ke, const Hex8Vector& x) {
+    Hex8Vector y{};
+    for (int row = 0; row < 24; ++row) {
+        double sum = 0.0;
+        for (int col = 0; col < 24; ++col) {
+            sum += ke[row][col] * x[col];
+        }
+        y[row] = sum;
+    }
+    return y;
+}
+
+void apply_one_element(const StructuredHexMesh& mesh,
+                       const Hex8Matrix& ke,
+                       const std::vector<double>& x,
+                       std::vector<double>& y,
+                       std::uint32_t ex,
+                       std::uint32_t ey,
+                       std::uint32_t ez) {
+    const auto nodes = mesh.element_nodes(ex, ey, ez);
+    Hex8Vector xe{};
+    for (int a = 0; a < 8; ++a) {
+        for (int c = 0; c < 3; ++c) {
+            xe[3 * a + c] = x[global_dof(nodes[a], c)];
+        }
+    }
+
+    const auto ye = apply_element_matrix(ke, xe);
+    for (int a = 0; a < 8; ++a) {
+        for (int c = 0; c < 3; ++c) {
+            y[global_dof(nodes[a], c)] += ye[3 * a + c];
+        }
+    }
+}
+
+std::uint32_t color_count(std::uint32_t n, std::uint32_t parity) {
+    if (n <= parity) {
+        return 0;
+    }
+    return 1U + (n - 1U - parity) / 2U;
+}
+
 }  // namespace
 
 DenseMatrix assemble_dense_stiffness(const StructuredHexMesh& mesh,
@@ -28,12 +83,11 @@ DenseMatrix assemble_dense_stiffness(const StructuredHexMesh& mesh,
     }
 
     DenseMatrix matrix(static_cast<std::size_t>(ndof * ndof), 0.0);
+    const auto ke = uniform_element_stiffness(mesh, material);
     for (std::uint32_t ez = 0; ez < mesh.nz; ++ez) {
         for (std::uint32_t ey = 0; ey < mesh.ny; ++ey) {
             for (std::uint32_t ex = 0; ex < mesh.nx; ++ex) {
                 const auto nodes = mesh.element_nodes(ex, ey, ez);
-                const auto coords = mesh.element_coordinates(ex, ey, ez);
-                const auto ke = hex8_stiffness(coords, material);
 
                 for (int a = 0; a < 8; ++a) {
                     for (int ca = 0; ca < 3; ++ca) {
@@ -60,29 +114,62 @@ std::vector<double> apply_matrix_free(const StructuredHexMesh& mesh,
                                       const std::vector<double>& x) {
     validate_vector_size(mesh, x);
     std::vector<double> y(x.size(), 0.0);
+    const auto ke = uniform_element_stiffness(mesh, material);
 
     for (std::uint32_t ez = 0; ez < mesh.nz; ++ez) {
         for (std::uint32_t ey = 0; ey < mesh.ny; ++ey) {
             for (std::uint32_t ex = 0; ex < mesh.nx; ++ex) {
-                const auto nodes = mesh.element_nodes(ex, ey, ez);
-                const auto coords = mesh.element_coordinates(ex, ey, ez);
-                Hex8Vector xe{};
-                for (int a = 0; a < 8; ++a) {
-                    for (int c = 0; c < 3; ++c) {
-                        xe[3 * a + c] = x[global_dof(nodes[a], c)];
-                    }
-                }
-
-                const auto ye = hex8_apply(coords, material, xe);
-                for (int a = 0; a < 8; ++a) {
-                    for (int c = 0; c < 3; ++c) {
-                        y[global_dof(nodes[a], c)] += ye[3 * a + c];
-                    }
-                }
+                apply_one_element(mesh, ke, x, y, ex, ey, ez);
             }
         }
     }
     return y;
+}
+
+std::vector<double> apply_matrix_free_openmp(const StructuredHexMesh& mesh,
+                                             const Material& material,
+                                             const std::vector<double>& x) {
+    validate_vector_size(mesh, x);
+#ifndef _OPENMP
+    return apply_matrix_free(mesh, material, x);
+#else
+    std::vector<double> y(x.size(), 0.0);
+    const auto ke = uniform_element_stiffness(mesh, material);
+
+    // HEX8 elements with the same (ex,ey,ez) parity never share a node.
+    // Eight-color traversal therefore permits lock-free parallel scatter.
+    for (std::uint32_t color = 0; color < 8; ++color) {
+        const std::uint32_t px = color & 1U;
+        const std::uint32_t py = (color >> 1U) & 1U;
+        const std::uint32_t pz = (color >> 2U) & 1U;
+        const std::uint32_t cx = color_count(mesh.nx, px);
+        const std::uint32_t cy = color_count(mesh.ny, py);
+        const std::uint32_t cz = color_count(mesh.nz, pz);
+        const std::int64_t count = static_cast<std::int64_t>(cx) * cy * cz;
+
+#pragma omp parallel for schedule(static)
+        for (std::int64_t local = 0; local < count; ++local) {
+            const auto ulocal = static_cast<std::uint64_t>(local);
+            const std::uint32_t ix = static_cast<std::uint32_t>(ulocal % cx);
+            const std::uint64_t yz = ulocal / cx;
+            const std::uint32_t iy = static_cast<std::uint32_t>(yz % cy);
+            const std::uint32_t iz = static_cast<std::uint32_t>(yz / cy);
+            const std::uint32_t ex = px + 2U * ix;
+            const std::uint32_t ey = py + 2U * iy;
+            const std::uint32_t ez = pz + 2U * iz;
+            apply_one_element(mesh, ke, x, y, ex, ey, ez);
+        }
+    }
+    return y;
+#endif
+}
+
+int cpu_openmp_max_threads() noexcept {
+#ifdef _OPENMP
+    return omp_get_max_threads();
+#else
+    return 1;
+#endif
 }
 
 std::vector<std::uint64_t> clamped_x0_dofs(const StructuredHexMesh& mesh) {
