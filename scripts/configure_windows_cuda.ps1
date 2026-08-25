@@ -1,5 +1,7 @@
 param(
-  [string]$CudaArch = "75"
+  [string]$CudaArch = "75",
+  [switch]$CpuAvx2,
+  [switch]$CpuVecReport
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,8 +49,6 @@ function Import-MsvcEnvironment {
 
   Write-Host "Initializing MSVC x64 environment: $vcvars"
 
-  # A .bat file cannot modify its parent PowerShell process directly. Run it in
-  # cmd.exe, dump the resulting environment, and import those variables here.
   $vcvarsCommand = "call `"$vcvars`" >nul && set"
   $lines = & cmd.exe /d /s /c $vcvarsCommand
   Assert-LastExitCode "Visual Studio environment initialization"
@@ -109,20 +109,26 @@ if (-not $nvcc) {
   throw "CUDA compiler nvcc.exe was not found in PATH, CUDA_PATH, or the standard NVIDIA Toolkit directory."
 }
 
+$avx2Value = if ($CpuAvx2) { "ON" } else { "OFF" }
+$vecReportValue = if ($CpuVecReport) { "ON" } else { "OFF" }
+$buildName = if ($CpuAvx2 -or $CpuVecReport) { "build-cuda-cpuopt" } else { "build-cuda" }
+$buildDir = Join-Path $PWD $buildName
+
 Write-Host "Using C++ compiler: $((Get-Command cl.exe).Source)"
 Write-Host "Using NMake:       $((Get-Command nmake.exe).Source)"
 Write-Host "Using CUDA:        $nvcc"
 Write-Host "CUDA architecture: sm_$CudaArch"
+Write-Host "CPU AVX2:          $avx2Value"
+Write-Host "CPU vec report:    $vecReportValue"
+Write-Host "Build directory:   $buildName"
 & $nvcc --version
 Assert-LastExitCode "nvcc --version"
 
-$buildDir = Join-Path $PWD "build-cuda"
 $cachePath = Join-Path $buildDir "CMakeCache.txt"
-
 if (Test-Path $cachePath) {
   $cache = Get-Content $cachePath -Raw
   if ($cache -notmatch 'CMAKE_GENERATOR:INTERNAL=NMake Makefiles') {
-    Write-Host "Removing build-cuda because it was configured with a different generator..."
+    Write-Host "Removing $buildName because it was configured with a different generator..."
     Remove-Item -Recurse -Force $buildDir
   }
 }
@@ -131,22 +137,24 @@ $nvccCMake = $nvcc -replace '\\', '/'
 
 Write-Host ""
 Write-Host "Configuring GFSS..."
-& cmake.exe -S . -B build-cuda -G "NMake Makefiles" `
+& cmake.exe -S . -B $buildName -G "NMake Makefiles" `
   -DCMAKE_BUILD_TYPE=Release `
   -DGFSS_ENABLE_CUDA=ON `
   -DGFSS_BUILD_TESTS=ON `
+  "-DGFSS_CPU_AVX2=$avx2Value" `
+  "-DGFSS_CPU_VEC_REPORT=$vecReportValue" `
   "-DCMAKE_CUDA_COMPILER=$nvccCMake" `
   "-DCMAKE_CUDA_ARCHITECTURES=$CudaArch"
 Assert-LastExitCode "CMake configure"
 
 Write-Host ""
 Write-Host "Building GFSS..."
-& cmake.exe --build build-cuda
+& cmake.exe --build $buildName
 Assert-LastExitCode "CMake build"
 
 Write-Host ""
 Write-Host "Running tests..."
-& ctest.exe --test-dir build-cuda --output-on-failure
+& ctest.exe --test-dir $buildName --output-on-failure
 Assert-LastExitCode "CTest"
 
 $gfssExe = Join-Path $buildDir "gfss.exe"
