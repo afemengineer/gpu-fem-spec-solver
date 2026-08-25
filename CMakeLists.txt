@@ -1,0 +1,62 @@
+cmake_minimum_required(VERSION 3.24)
+
+project(gpu_fem_spec_solver VERSION 0.1.0 LANGUAGES CXX)
+
+option(GFSS_ENABLE_CUDA "Build CUDA instrumentation and GPU solver components" ON)
+option(GFSS_BUILD_TESTS "Build unit tests" ON)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_library(gfss_core STATIC
+    src/memory_model.cpp
+)
+
+target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(gfss_core PUBLIC cxx_std_17)
+
+if(MSVC)
+    target_compile_options(gfss_core PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(gfss_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+set(GFSS_APP_SOURCES src/main.cpp)
+
+if(GFSS_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        set(CMAKE_CUDA_STANDARD 17)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        list(APPEND GFSS_APP_SOURCES src/gpu_info.cu)
+        set(GFSS_HAS_CUDA TRUE)
+    else()
+        message(WARNING "GFSS_ENABLE_CUDA=ON but no CUDA compiler was found; building CPU-only instrumentation.")
+        list(APPEND GFSS_APP_SOURCES src/gpu_info_stub.cpp)
+        set(GFSS_HAS_CUDA FALSE)
+    endif()
+else()
+    list(APPEND GFSS_APP_SOURCES src/gpu_info_stub.cpp)
+    set(GFSS_HAS_CUDA FALSE)
+endif()
+
+add_executable(gfss ${GFSS_APP_SOURCES})
+target_link_libraries(gfss PRIVATE gfss_core)
+target_include_directories(gfss PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(GFSS_HAS_CUDA)
+    target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=1)
+    set_target_properties(gfss PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+else()
+    target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
+endif()
+
+if(GFSS_BUILD_TESTS)
+    enable_testing()
+    add_executable(gfss_memory_model_test tests/memory_model_test.cpp)
+    target_link_libraries(gfss_memory_model_test PRIVATE gfss_core)
+    add_test(NAME memory_model COMMAND gfss_memory_model_test)
+endif()
