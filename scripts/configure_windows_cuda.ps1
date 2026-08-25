@@ -1,7 +1,8 @@
 param(
   [string]$CudaArch = "75",
   [switch]$CpuAvx2,
-  [switch]$CpuVecReport
+  [switch]$CpuVecReport,
+  [switch]$CpuFastFp
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,7 +112,8 @@ if (-not $nvcc) {
 
 $avx2Value = if ($CpuAvx2) { "ON" } else { "OFF" }
 $vecReportValue = if ($CpuVecReport) { "ON" } else { "OFF" }
-$buildName = if ($CpuAvx2 -or $CpuVecReport) { "build-cuda-cpuopt" } else { "build-cuda" }
+$fastFpValue = if ($CpuFastFp) { "ON" } else { "OFF" }
+$buildName = if ($CpuAvx2 -or $CpuVecReport -or $CpuFastFp) { "build-cuda-cpuopt" } else { "build-cuda" }
 $buildDir = Join-Path $PWD $buildName
 
 Write-Host "Using C++ compiler: $((Get-Command cl.exe).Source)"
@@ -120,6 +122,7 @@ Write-Host "Using CUDA:        $nvcc"
 Write-Host "CUDA architecture: sm_$CudaArch"
 Write-Host "CPU AVX2:          $avx2Value"
 Write-Host "CPU vec report:    $vecReportValue"
+Write-Host "CPU fast FP:       $fastFpValue"
 Write-Host "Build directory:   $buildName"
 & $nvcc --version
 Assert-LastExitCode "nvcc --version"
@@ -143,6 +146,7 @@ Write-Host "Configuring GFSS..."
   -DGFSS_BUILD_TESTS=ON `
   "-DGFSS_CPU_AVX2=$avx2Value" `
   "-DGFSS_CPU_VEC_REPORT=$vecReportValue" `
+  "-DGFSS_CPU_FAST_FP=$fastFpValue" `
   "-DCMAKE_CUDA_COMPILER=$nvccCMake" `
   "-DCMAKE_CUDA_ARCHITECTURES=$CudaArch"
 Assert-LastExitCode "CMake configure"
