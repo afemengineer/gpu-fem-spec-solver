@@ -6,11 +6,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace gfss {
 namespace {
@@ -91,6 +92,38 @@ std::array<float, 24 * 24> regular_element_stiffness_float(const StructuredHexMe
     return result;
 }
 
+struct TimingSummary {
+    double best{0.0};
+    double median{0.0};
+    double mean{0.0};
+    double p95{0.0};
+};
+
+TimingSummary summarize(const std::vector<double>& samples) {
+    if (samples.empty()) {
+        throw std::invalid_argument("cannot summarize an empty timing sample set");
+    }
+
+    std::vector<double> sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+
+    const auto percentile = [&](double p) {
+        const double position = p * static_cast<double>(sorted.size() - 1);
+        const auto lower = static_cast<std::size_t>(position);
+        const auto upper = std::min(lower + 1, sorted.size() - 1);
+        const double fraction = position - static_cast<double>(lower);
+        return sorted[lower] * (1.0 - fraction) + sorted[upper] * fraction;
+    };
+
+    TimingSummary summary;
+    summary.best = sorted.front();
+    summary.median = percentile(0.50);
+    summary.p95 = percentile(0.95);
+    summary.mean = std::accumulate(samples.begin(), samples.end(), 0.0) /
+                   static_cast<double>(samples.size());
+    return summary;
+}
+
 }  // namespace
 
 CudaOperatorResult apply_matrix_free_cuda_atomic(const StructuredHexMesh& mesh,
@@ -122,6 +155,7 @@ CudaOperatorResult apply_matrix_free_cuda_atomic(const StructuredHexMesh& mesh,
     float* d_x = nullptr;
     float* d_y = nullptr;
     cudaEvent_t start{};
+    cudaEvent_t after_zero{};
     cudaEvent_t stop{};
 
     const std::size_t bytes = x.size() * sizeof(float);
@@ -130,43 +164,77 @@ CudaOperatorResult apply_matrix_free_cuda_atomic(const StructuredHexMesh& mesh,
         check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_y), bytes), "cudaMalloc(y)");
         check_cuda(cudaMemcpy(d_x, x.data(), bytes, cudaMemcpyHostToDevice), "cudaMemcpy(x H2D)");
         check_cuda(cudaEventCreate(&start), "cudaEventCreate(start)");
+        check_cuda(cudaEventCreate(&after_zero), "cudaEventCreate(after_zero)");
         check_cuda(cudaEventCreate(&stop), "cudaEventCreate(stop)");
 
         constexpr int threads = 128;
         const std::uint32_t elements = static_cast<std::uint32_t>(mesh.element_count());
         const int blocks = static_cast<int>((elements + threads - 1U) / threads);
 
-        double best_ms = 1.0e300;
-        double total_ms = 0.0;
+        // Unmeasured warmup to populate code/data caches and allow the GPU clock state
+        // to settle before collecting benchmark samples.
+        check_cuda(cudaMemsetAsync(d_y, 0, bytes), "cudaMemsetAsync(y warmup)");
+        hex8_atomic_apply_kernel<<<blocks, threads>>>(mesh.nx, mesh.ny, mesh.nz, d_x, d_y);
+        check_cuda(cudaGetLastError(), "hex8_atomic_apply_kernel warmup launch");
+        check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(warmup)");
+
+        std::vector<double> total_samples;
+        std::vector<double> zero_samples;
+        std::vector<double> kernel_samples;
+        total_samples.reserve(static_cast<std::size_t>(repeats));
+        zero_samples.reserve(static_cast<std::size_t>(repeats));
+        kernel_samples.reserve(static_cast<std::size_t>(repeats));
+
         for (int repeat = 0; repeat < repeats; ++repeat) {
             check_cuda(cudaEventRecord(start), "cudaEventRecord(start)");
             check_cuda(cudaMemsetAsync(d_y, 0, bytes), "cudaMemsetAsync(y)");
+            check_cuda(cudaEventRecord(after_zero), "cudaEventRecord(after_zero)");
             hex8_atomic_apply_kernel<<<blocks, threads>>>(mesh.nx, mesh.ny, mesh.nz, d_x, d_y);
             check_cuda(cudaGetLastError(), "hex8_atomic_apply_kernel launch");
             check_cuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
             check_cuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
 
-            float ms = 0.0f;
-            check_cuda(cudaEventElapsedTime(&ms, start, stop), "cudaEventElapsedTime");
-            best_ms = std::min(best_ms, static_cast<double>(ms));
-            total_ms += static_cast<double>(ms);
+            float total_ms = 0.0f;
+            float zero_ms = 0.0f;
+            float kernel_ms = 0.0f;
+            check_cuda(cudaEventElapsedTime(&total_ms, start, stop), "cudaEventElapsedTime(total)");
+            check_cuda(cudaEventElapsedTime(&zero_ms, start, after_zero), "cudaEventElapsedTime(zero)");
+            check_cuda(cudaEventElapsedTime(&kernel_ms, after_zero, stop), "cudaEventElapsedTime(kernel)");
+
+            total_samples.push_back(static_cast<double>(total_ms));
+            zero_samples.push_back(static_cast<double>(zero_ms));
+            kernel_samples.push_back(static_cast<double>(kernel_ms));
         }
+
+        const auto total = summarize(total_samples);
+        const auto zero = summarize(zero_samples);
+        const auto kernel = summarize(kernel_samples);
 
         CudaOperatorResult result;
         result.y.resize(x.size());
         check_cuda(cudaMemcpy(result.y.data(), d_y, bytes, cudaMemcpyDeviceToHost),
                    "cudaMemcpy(y D2H)");
-        result.timing.best_ms = best_ms;
-        result.timing.mean_ms = total_ms / static_cast<double>(repeats);
+        result.timing.best_ms = total.best;
+        result.timing.median_ms = total.median;
+        result.timing.mean_ms = total.mean;
+        result.timing.p95_ms = total.p95;
+        result.timing.best_zero_ms = zero.best;
+        result.timing.median_zero_ms = zero.median;
+        result.timing.mean_zero_ms = zero.mean;
+        result.timing.best_kernel_ms = kernel.best;
+        result.timing.median_kernel_ms = kernel.median;
+        result.timing.mean_kernel_ms = kernel.mean;
         result.device_bytes = 2 * bytes;
 
         cudaEventDestroy(start);
+        cudaEventDestroy(after_zero);
         cudaEventDestroy(stop);
         cudaFree(d_x);
         cudaFree(d_y);
         return result;
     } catch (...) {
         if (start) cudaEventDestroy(start);
+        if (after_zero) cudaEventDestroy(after_zero);
         if (stop) cudaEventDestroy(stop);
         if (d_x) cudaFree(d_x);
         if (d_y) cudaFree(d_y);
