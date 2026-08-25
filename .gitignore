@@ -1,0 +1,13 @@
+/build/
+/out/
+/results/
+*.user
+*.suo
+*.vcxproj
+*.vcxproj.filters
+*.sln
+.vs/
+.vscode/settings.json
+__pycache__/
+*.pyc
+.DS_Store
