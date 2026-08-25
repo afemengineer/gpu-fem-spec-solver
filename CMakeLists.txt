@@ -137,6 +137,10 @@ add_executable(gfss_cpu_gold_bench benchmarks/cpu_gold_bench.cpp)
 target_link_libraries(gfss_cpu_gold_bench PRIVATE gfss_core)
 target_include_directories(gfss_cpu_gold_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_cpu_gold_profile benchmarks/cpu_gold_profile.cpp)
+target_link_libraries(gfss_cpu_gold_profile PRIVATE gfss_core)
+target_include_directories(gfss_cpu_gold_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
