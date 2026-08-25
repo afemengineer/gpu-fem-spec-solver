@@ -14,6 +14,7 @@ add_library(gfss_core STATIC
     src/hex8.cpp
     src/structured_hex_mesh.cpp
     src/cpu_elasticity.cpp
+    src/cpu_solver.cpp
 )
 
 target_include_directories(gfss_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -71,4 +72,8 @@ if(GFSS_BUILD_TESTS)
     add_executable(gfss_cpu_operator_test tests/cpu_operator_test.cpp)
     target_link_libraries(gfss_cpu_operator_test PRIVATE gfss_core)
     add_test(NAME cpu_operator COMMAND gfss_cpu_operator_test)
+
+    add_executable(gfss_cpu_solver_test tests/cpu_solver_test.cpp)
+    target_link_libraries(gfss_cpu_solver_test PRIVATE gfss_core)
+    add_test(NAME cpu_solver COMMAND gfss_cpu_solver_test)
 endif()
