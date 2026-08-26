@@ -31,7 +31,9 @@ double relative_max_difference(const std::vector<double>& reference,
 }  // namespace
 
 int main() {
-    const gfss::StructuredHexMesh mesh{8, 7, 6, 2.0, 1.25, 0.75};
+    // nx=70 guarantees at least one full 32-lane interior x-warp, so the
+    // shuffle fast path is exercised while ny/nz remain intentionally uneven.
+    const gfss::StructuredHexMesh mesh{70, 7, 6, 2.0, 1.25, 0.75};
     const gfss::Material material{73000.0, 0.29};
 
     std::vector<float> x_float(static_cast<std::size_t>(mesh.dof_count()));
@@ -47,12 +49,14 @@ int main() {
     const auto atomic = gfss::apply_matrix_free_cuda_atomic(mesh, material, x_float, 2);
     const auto node = gfss::apply_node_stencil_cuda_soa(mesh, material, x_float, 2, 256);
     const auto gold3d = gfss::apply_node_stencil_cuda_gold3d(mesh, material, x_float, 2, 8);
-    const auto sparse = gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, x_float, 2, 16);
+    const auto sparse = gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, x_float, 2, 4);
+    const auto shuffle = gfss::apply_node_stencil_cuda_gold_shuffle(mesh, material, x_float, 2, 4);
 
     const double atomic_rel = relative_max_difference(cpu, atomic.y);
     const double node_rel = relative_max_difference(cpu, node.y);
     const double gold3d_rel = relative_max_difference(cpu, gold3d.y);
     const double sparse_rel = relative_max_difference(cpu, sparse.y);
+    const double shuffle_rel = relative_max_difference(cpu, shuffle.y);
 
     require(atomic_rel < 2.0e-5,
             "FP32 CUDA atomic operator must match double CPU reference within tolerance");
@@ -62,10 +66,13 @@ int main() {
             "FP32 CUDA Gold3D stencil must match double CPU reference within tolerance");
     require(sparse_rel < 2.0e-5,
             "FP32 CUDA GoldSparse stencil must match double CPU reference within tolerance");
+    require(shuffle_rel < 2.0e-5,
+            "FP32 CUDA GoldShuffle stencil must match double CPU reference within tolerance");
     require(atomic.timing.best_ms > 0.0, "CUDA atomic timing must be positive");
     require(node.timing.best_ms > 0.0, "CUDA node timing must be positive");
     require(gold3d.timing.best_ms > 0.0, "CUDA Gold3D timing must be positive");
     require(sparse.timing.best_ms > 0.0, "CUDA GoldSparse timing must be positive");
+    require(shuffle.timing.best_ms > 0.0, "CUDA GoldShuffle timing must be positive");
     require(atomic.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA atomic device-vector accounting mismatch");
     require(node.device_bytes == 2 * x_float.size() * sizeof(float),
@@ -74,20 +81,26 @@ int main() {
             "CUDA Gold3D device-vector accounting mismatch");
     require(sparse.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA GoldSparse device-vector accounting mismatch");
+    require(shuffle.device_bytes == 2 * x_float.size() * sizeof(float),
+            "CUDA GoldShuffle device-vector accounting mismatch");
     require(node.timing.median_zero_ms == 0.0,
             "CUDA node stencil must not require output zeroing");
     require(gold3d.timing.median_zero_ms == 0.0,
             "CUDA Gold3D stencil must not require output zeroing");
     require(sparse.timing.median_zero_ms == 0.0,
             "CUDA GoldSparse stencil must not require output zeroing");
+    require(shuffle.timing.median_zero_ms == 0.0,
+            "CUDA GoldShuffle stencil must not require output zeroing");
 
     std::cout << "CUDA operator checks passed; atomic_rel_max=" << atomic_rel
               << " node_rel_max=" << node_rel
               << " gold3d_rel_max=" << gold3d_rel
               << " sparse_rel_max=" << sparse_rel
+              << " shuffle_rel_max=" << shuffle_rel
               << " atomic_best_ms=" << atomic.timing.best_ms
               << " node_best_ms=" << node.timing.best_ms
               << " gold3d_best_ms=" << gold3d.timing.best_ms
-              << " sparse_best_ms=" << sparse.timing.best_ms << '\n';
+              << " sparse_best_ms=" << sparse.timing.best_ms
+              << " shuffle_best_ms=" << shuffle.timing.best_ms << '\n';
     return 0;
 }
