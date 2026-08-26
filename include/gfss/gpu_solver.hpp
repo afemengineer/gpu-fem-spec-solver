@@ -9,16 +9,28 @@
 
 namespace gfss {
 
+struct GpuPcgAuditSample {
+    std::size_t iteration{0};
+    double recursive_relative_residual{0.0};
+    double audited_relative_residual{0.0};
+    double elapsed_ms{0.0};
+};
+
 struct GpuPcgResult {
     std::vector<float> x;
+    std::vector<GpuPcgAuditSample> audit_samples;
     std::size_t iterations{0};
     std::size_t matvecs{0};
     // Kept for the archived restart baseline compiled inside gpu_pcg_audit.cu.
     std::size_t residual_replacements{0};
     std::size_t residual_audits{0};
+    std::size_t best_audited_iteration{0};
     bool converged{false};
+    bool stagnated{false};
+    double requested_relative_residual{0.0};
     double reported_relative_residual{0.0};
     double audited_relative_residual{0.0};
+    double best_audited_relative_residual{0.0};
     double solve_ms{0.0};
     std::size_t explicit_device_bytes{0};
 };
@@ -44,7 +56,10 @@ GpuPcgResult solve_pcg_cuda_gold_sparse_x0(
 // material. The constructor uploads stencil/Jacobi data, allocates the six
 // solver vectors, creates cuBLAS state, and warms the matvec path once. Each
 // solve() then reuses that state and only transfers the new RHS and returned
-// correction around the timed PCG iteration loop.
+// correction around the timed PCG iteration loop. The persistent path also
+// audits geometric residual milestones and detects a stalled audited residual
+// after the recursive residual has crossed the requested forcing term. A
+// stalled solve returns its correction and telemetry instead of throwing.
 class GpuPcgContext {
 public:
     GpuPcgContext(const StructuredHexMesh& mesh,
