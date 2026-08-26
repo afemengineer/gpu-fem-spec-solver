@@ -47,10 +47,13 @@ int main() {
     const auto atomic = gfss::apply_matrix_free_cuda_atomic(mesh, material, x_float, 2);
     const auto node = gfss::apply_node_stencil_cuda_soa(mesh, material, x_float, 2, 256);
     const auto gold3d = gfss::apply_node_stencil_cuda_gold3d(mesh, material, x_float, 2, 8);
+    const auto shared =
+        gfss::apply_node_stencil_cuda_shared_tile(mesh, material, x_float, 2, 4, 4);
 
     const double atomic_rel = relative_max_difference(cpu, atomic.y);
     const double node_rel = relative_max_difference(cpu, node.y);
     const double gold3d_rel = relative_max_difference(cpu, gold3d.y);
+    const double shared_rel = relative_max_difference(cpu, shared.y);
 
     require(atomic_rel < 2.0e-5,
             "FP32 CUDA atomic operator must match double CPU reference within tolerance");
@@ -58,25 +61,34 @@ int main() {
             "FP32 CUDA node stencil must match double CPU reference within tolerance");
     require(gold3d_rel < 2.0e-5,
             "FP32 CUDA Gold3D stencil must match double CPU reference within tolerance");
+    require(shared_rel < 2.0e-5,
+            "FP32 CUDA shared-tile stencil must match double CPU reference within tolerance");
     require(atomic.timing.best_ms > 0.0, "CUDA atomic timing must be positive");
     require(node.timing.best_ms > 0.0, "CUDA node timing must be positive");
     require(gold3d.timing.best_ms > 0.0, "CUDA Gold3D timing must be positive");
+    require(shared.timing.best_ms > 0.0, "CUDA shared-tile timing must be positive");
     require(atomic.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA atomic device-vector accounting mismatch");
     require(node.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA node device-vector accounting mismatch");
     require(gold3d.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA Gold3D device-vector accounting mismatch");
+    require(shared.device_bytes == 2 * x_float.size() * sizeof(float),
+            "CUDA shared-tile device-vector accounting mismatch");
     require(node.timing.median_zero_ms == 0.0,
             "CUDA node stencil must not require output zeroing");
     require(gold3d.timing.median_zero_ms == 0.0,
             "CUDA Gold3D stencil must not require output zeroing");
+    require(shared.timing.median_zero_ms == 0.0,
+            "CUDA shared-tile stencil must not require output zeroing");
 
     std::cout << "CUDA operator checks passed; atomic_rel_max=" << atomic_rel
               << " node_rel_max=" << node_rel
               << " gold3d_rel_max=" << gold3d_rel
+              << " shared_rel_max=" << shared_rel
               << " atomic_best_ms=" << atomic.timing.best_ms
               << " node_best_ms=" << node.timing.best_ms
-              << " gold3d_best_ms=" << gold3d.timing.best_ms << '\n';
+              << " gold3d_best_ms=" << gold3d.timing.best_ms
+              << " shared_best_ms=" << shared.timing.best_ms << '\n';
     return 0;
 }
