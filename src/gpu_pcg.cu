@@ -307,6 +307,17 @@ __global__ void update_x_r_pcg_kernel(
     }
 }
 
+__global__ void residual_from_b_ax_pcg_kernel(
+    int n,
+    const float* __restrict__ b,
+    const float* __restrict__ ax,
+    float* __restrict__ r) {
+    const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (idx < n) {
+        r[idx] = b[idx] - ax[idx];
+    }
+}
+
 __global__ void update_p_pcg_kernel(
     int n,
     float beta,
@@ -572,6 +583,7 @@ GpuPcgResult solve_pcg_cuda_gold_sparse_x0(
         } else {
             constexpr int vector_threads = 256;
             const int vector_blocks = (n + vector_threads - 1) / vector_threads;
+            constexpr std::size_t residual_replacement_period = 50U;
 
             for (std::size_t iteration = 0; iteration < max_iterations; ++iteration) {
                 launch_pcg_matvec(mesh, block_y, nodes, d_p, d_q);
@@ -596,9 +608,48 @@ GpuPcgResult solve_pcg_cuda_gold_sparse_x0(
                 if (!std::isfinite(rr) || !std::isfinite(result.reported_relative_residual)) {
                     throw std::runtime_error("GPU PCG residual became non-finite");
                 }
-                if (result.reported_relative_residual <= relative_tolerance) {
-                    result.converged = true;
-                    break;
+
+                const bool recursive_candidate =
+                    result.reported_relative_residual <= relative_tolerance;
+                const bool periodic_replacement =
+                    result.iterations % residual_replacement_period == 0U;
+
+                if (recursive_candidate || periodic_replacement) {
+                    launch_pcg_matvec(mesh, block_y, nodes, d_x, d_q);
+                    ++result.matvecs;
+                    ++result.residual_replacements;
+
+                    residual_from_b_ax_pcg_kernel<<<vector_blocks, vector_threads>>>(
+                        n, d_b, d_q, d_r);
+                    check_cuda_pcg(cudaGetLastError(), "GPU PCG reliable residual launch");
+
+                    rr = dot_pcg(handle, n, d_r, d_r);
+                    result.reported_relative_residual =
+                        std::sqrt(static_cast<double>(rr) / static_cast<double>(bnorm2));
+
+                    if (!std::isfinite(rr) ||
+                        !std::isfinite(result.reported_relative_residual)) {
+                        throw std::runtime_error("GPU PCG recomputed residual became non-finite");
+                    }
+                    if (result.reported_relative_residual <= relative_tolerance) {
+                        result.converged = true;
+                        break;
+                    }
+
+                    // Residual replacement breaks exact recurrence consistency.
+                    // Restart with the freshly preconditioned residual rather
+                    // than pretending the previous search direction remains
+                    // conjugate to the new residual.
+                    launch_pcg_jacobi(mesh, block_y, nodes, d_r, d_z);
+                    rho = dot_pcg(handle, n, d_r, d_z);
+                    if (!(rho > 0.0f) || !std::isfinite(rho)) {
+                        throw std::runtime_error(
+                            "GPU PCG reliable restart produced invalid preconditioned residual");
+                    }
+                    check_cuda_pcg(cudaMemcpyAsync(d_p, d_z, vector_bytes,
+                                                   cudaMemcpyDeviceToDevice),
+                                   "cudaMemcpyAsync(PCG reliable restart p=z)");
+                    continue;
                 }
 
                 launch_pcg_jacobi(mesh, block_y, nodes, d_r, d_z);
