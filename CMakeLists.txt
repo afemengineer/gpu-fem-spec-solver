@@ -92,6 +92,7 @@ add_library(gfss_multigrid_reference STATIC
     src/aggregation_coarse_space.cpp
     src/aggregation_coarse_operator.cpp
     src/aggregation_two_grid_reference.cpp
+    src/smoothed_aggregation_reference.cpp
 )
 target_link_libraries(gfss_multigrid_reference PUBLIC gfss_core)
 target_include_directories(gfss_multigrid_reference PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -232,6 +233,10 @@ add_executable(gfss_aggregation_two_grid_reference_bench benchmarks/aggregation_
 target_link_libraries(gfss_aggregation_two_grid_reference_bench PRIVATE gfss_multigrid_reference)
 target_include_directories(gfss_aggregation_two_grid_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_smoothed_aggregation_reference_bench benchmarks/smoothed_aggregation_reference_bench.cpp)
+target_link_libraries(gfss_smoothed_aggregation_reference_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_smoothed_aggregation_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
@@ -274,6 +279,10 @@ if(GFSS_BUILD_TESTS)
     add_executable(gfss_aggregation_two_grid_reference_test tests/aggregation_two_grid_reference_test.cpp)
     target_link_libraries(gfss_aggregation_two_grid_reference_test PRIVATE gfss_multigrid_reference)
     add_test(NAME aggregation_two_grid_reference COMMAND gfss_aggregation_two_grid_reference_test)
+
+    add_executable(gfss_smoothed_aggregation_reference_test tests/smoothed_aggregation_reference_test.cpp)
+    target_link_libraries(gfss_smoothed_aggregation_reference_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME smoothed_aggregation_reference COMMAND gfss_smoothed_aggregation_reference_test)
 
     if(GFSS_HAS_CUDA)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
