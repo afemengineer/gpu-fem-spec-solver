@@ -1,5 +1,6 @@
 #include "gpu_pcg_audit.cu"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -110,9 +111,9 @@ struct GpuPcgContext::Impl {
             throw std::invalid_argument(
                 "GPU PCG context RHS size does not match mesh DOF count");
         }
-        if (!(relative_tolerance > 0.0)) {
+        if (!(relative_tolerance > 0.0) || relative_tolerance >= 1.0) {
             throw std::invalid_argument(
-                "GPU PCG context relative tolerance must be positive");
+                "GPU PCG context relative tolerance must be in (0, 1)");
         }
         if (max_iterations == 0U) {
             throw std::invalid_argument(
@@ -156,12 +157,15 @@ struct GpuPcgContext::Impl {
 
         GpuPcgResult result;
         result.explicit_device_bytes = 6U * vector_bytes;
+        result.requested_relative_residual = relative_tolerance;
         result.reported_relative_residual =
             bnorm2 > 0.0f
                 ? std::sqrt(static_cast<double>(rr) /
                             static_cast<double>(bnorm2))
                 : 0.0;
         result.audited_relative_residual = result.reported_relative_residual;
+        result.best_audited_relative_residual =
+            result.reported_relative_residual;
 
         if (!(bnorm2 >= 0.0f) || !std::isfinite(bnorm2)) {
             throw std::runtime_error(
@@ -174,6 +178,50 @@ struct GpuPcgContext::Impl {
             constexpr int vector_threads = 256;
             const int vector_blocks =
                 (n + vector_threads - 1) / vector_threads;
+            constexpr double milestone_factor = 0.31622776601683794;
+            constexpr std::size_t target_audit_period = 32U;
+            constexpr std::size_t stagnation_audits = 6U;
+            constexpr double meaningful_improvement = 0.005;
+
+            double next_milestone = 1.0e-1;
+            std::size_t last_audit_iteration = 0U;
+            std::size_t no_progress_audits = 0U;
+            double last_target_audited =
+                std::numeric_limits<double>::infinity();
+
+            auto audit_current = [&](std::size_t iteration) {
+                launch_pcg_matvec(mesh, block_y, nodes, d_x, d_q);
+                ++result.matvecs;
+                ++result.residual_audits;
+                residual_from_b_ax_pcg_kernel<<<vector_blocks,
+                                               vector_threads>>>(
+                    n, d_b, d_q, d_z);
+                check_cuda_pcg(cudaGetLastError(),
+                               "GPU PCG context residual audit launch");
+                const float rr_audit = dot_pcg(handle, n, d_z, d_z);
+                const double audited =
+                    std::sqrt(static_cast<double>(rr_audit) /
+                              static_cast<double>(bnorm2));
+                if (!std::isfinite(rr_audit) || !std::isfinite(audited)) {
+                    throw std::runtime_error(
+                        "GPU PCG context audited residual became non-finite");
+                }
+                result.audited_relative_residual = audited;
+                if (audited < result.best_audited_relative_residual) {
+                    result.best_audited_relative_residual = audited;
+                    result.best_audited_iteration = iteration;
+                }
+                const double elapsed_ms =
+                    std::chrono::duration<double, std::milli>(
+                        Clock::now() - wall_start).count();
+                result.audit_samples.push_back(GpuPcgAuditSample{
+                    iteration,
+                    result.reported_relative_residual,
+                    audited,
+                    elapsed_ms});
+                last_audit_iteration = iteration;
+                return audited;
+            };
 
             for (std::size_t iteration = 0;
                  iteration < max_iterations;
@@ -206,29 +254,45 @@ struct GpuPcgContext::Impl {
                         "GPU PCG context residual became non-finite");
                 }
 
-                if (result.reported_relative_residual <=
-                    relative_tolerance) {
-                    launch_pcg_matvec(mesh, block_y, nodes, d_x, d_q);
-                    ++result.matvecs;
-                    ++result.residual_audits;
-                    residual_from_b_ax_pcg_kernel<<<vector_blocks,
-                                                   vector_threads>>>(
-                        n, d_b, d_q, d_z);
-                    check_cuda_pcg(cudaGetLastError(),
-                                   "GPU PCG context residual audit launch");
-                    const float rr_audit = dot_pcg(handle, n, d_z, d_z);
-                    result.audited_relative_residual =
-                        std::sqrt(static_cast<double>(rr_audit) /
-                                  static_cast<double>(bnorm2));
-                    if (!std::isfinite(rr_audit) ||
-                        !std::isfinite(result.audited_relative_residual)) {
-                        throw std::runtime_error(
-                            "GPU PCG context audited residual became non-finite");
+                const bool milestone_due =
+                    result.reported_relative_residual <= next_milestone;
+                const bool target_region =
+                    result.reported_relative_residual <= relative_tolerance;
+                const bool periodic_target_due =
+                    target_region &&
+                    (last_audit_iteration == 0U ||
+                     result.iterations - last_audit_iteration >=
+                         target_audit_period);
+
+                if (milestone_due || periodic_target_due) {
+                    const double audited = audit_current(result.iterations);
+
+                    while (result.reported_relative_residual <= next_milestone &&
+                           next_milestone > 1.0e-12) {
+                        next_milestone *= milestone_factor;
                     }
-                    if (result.audited_relative_residual <=
-                        relative_tolerance) {
+
+                    if (audited <= relative_tolerance) {
                         result.converged = true;
                         break;
+                    }
+
+                    if (target_region) {
+                        if (std::isfinite(last_target_audited)) {
+                            const double required =
+                                last_target_audited *
+                                (1.0 - meaningful_improvement);
+                            if (audited >= required) {
+                                ++no_progress_audits;
+                            } else {
+                                no_progress_audits = 0U;
+                            }
+                        }
+                        last_target_audited = audited;
+                        if (no_progress_audits >= stagnation_audits) {
+                            result.stagnated = true;
+                            break;
+                        }
                     }
                 }
 
@@ -246,23 +310,9 @@ struct GpuPcgContext::Impl {
                 rho = rho_new;
             }
 
-            if (!result.converged) {
-                launch_pcg_matvec(mesh, block_y, nodes, d_x, d_q);
-                ++result.matvecs;
-                ++result.residual_audits;
-                residual_from_b_ax_pcg_kernel<<<vector_blocks,
-                                               vector_threads>>>(
-                    n, d_b, d_q, d_z);
-                check_cuda_pcg(cudaGetLastError(),
-                               "GPU PCG context final residual audit launch");
-                const float rr_audit = dot_pcg(handle, n, d_z, d_z);
-                result.audited_relative_residual =
-                    std::sqrt(static_cast<double>(rr_audit) /
-                              static_cast<double>(bnorm2));
-                if (!std::isfinite(result.audited_relative_residual)) {
-                    throw std::runtime_error(
-                        "GPU PCG context final audited residual became non-finite");
-                }
+            if (!result.converged &&
+                last_audit_iteration != result.iterations) {
+                audit_current(result.iterations);
             }
         }
 
