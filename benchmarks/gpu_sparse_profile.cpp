@@ -22,7 +22,7 @@ std::uint32_t parse_u32(const char* text) {
 int parse_positive_int(const char* text) {
     const int value = std::stoi(text);
     if (value <= 0) {
-        throw std::invalid_argument("repeat count must be positive");
+        throw std::invalid_argument("value must be positive");
     }
     return value;
 }
@@ -35,6 +35,10 @@ int main(int argc, char** argv) {
         const std::uint32_t ny = argc > 2 ? parse_u32(argv[2]) : nx;
         const std::uint32_t nz = argc > 3 ? parse_u32(argv[3]) : nx;
         const int repeats = argc > 4 ? parse_positive_int(argv[4]) : 2;
+        const int block_y = argc > 5 ? parse_positive_int(argv[5]) : 16;
+        if (block_y > 32) {
+            throw std::invalid_argument("block_y must be in [1, 32]");
+        }
 
         const gfss::StructuredHexMesh mesh{nx, ny, nz, 1.0, 1.0, 1.0};
         const gfss::Material material{210.0e9, 0.30};
@@ -48,7 +52,7 @@ int main(int argc, char** argv) {
         }
 
         const auto result =
-            gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, x, repeats, 16);
+            gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, x, repeats, block_y);
 
         double checksum = 0.0;
         const std::size_t stride = std::max<std::size_t>(1U, result.y.size() / 1024U);
@@ -64,7 +68,7 @@ int main(int argc, char** argv) {
                   << "GFSS CUDA GoldSparse profiler workload\n"
                   << "mesh=" << nx << 'x' << ny << 'x' << nz
                   << " dofs=" << mesh.dof_count() << '\n'
-                  << "block=32x16x1\n"
+                  << "block=32x" << block_y << "x1\n"
                   << "interior_fmas_per_node=153\n"
                   << "repeats=" << repeats << '\n'
                   << "median_ms=" << result.timing.median_ms << '\n'
@@ -74,7 +78,7 @@ int main(int argc, char** argv) {
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n'
-                  << "usage: gfss_gpu_sparse_profile [nx [ny nz [repeats]]]\n";
+                  << "usage: gfss_gpu_sparse_profile [nx [ny nz [repeats [block_y]]]]\n";
         return 1;
     }
 }
