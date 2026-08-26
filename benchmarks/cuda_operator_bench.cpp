@@ -156,6 +156,7 @@ int main(int argc, char** argv) {
         const auto sparse128 = gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, xf, repeats, 4);
         const auto sparse256 = gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, xf, repeats, 8);
         const auto sparse512 = gfss::apply_node_stencil_cuda_gold_sparse(mesh, material, xf, repeats, 16);
+        const auto shuffle128 = gfss::apply_node_stencil_cuda_gold_shuffle(mesh, material, xf, repeats, 4);
 
         const double cpu_mdof_s =
             static_cast<double>(mesh.dof_count()) / (cpu_timing.median_ms * 1.0e3);
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
         const double sparse128_mdof_s = gpu_mdof_s(sparse128, mesh.dof_count());
         const double sparse256_mdof_s = gpu_mdof_s(sparse256, mesh.dof_count());
         const double sparse512_mdof_s = gpu_mdof_s(sparse512, mesh.dof_count());
+        const double shuffle128_mdof_s = gpu_mdof_s(shuffle128, mesh.dof_count());
         const double best_node_mdof_s = std::max({node128_mdof_s, node256_mdof_s, node512_mdof_s});
         const double best_gold3d_mdof_s = std::max({gold128_mdof_s, gold256_mdof_s, gold512_mdof_s});
         const double best_sparse_mdof_s = std::max({sparse128_mdof_s, sparse256_mdof_s, sparse512_mdof_s});
@@ -184,6 +186,7 @@ int main(int argc, char** argv) {
         const double sparse128_rel = relative_max_difference(oracle, sparse128.y);
         const double sparse256_rel = relative_max_difference(oracle, sparse256.y);
         const double sparse512_rel = relative_max_difference(oracle, sparse512.y);
+        const double shuffle128_rel = relative_max_difference(oracle, shuffle128.y);
 
         std::cout << std::fixed << std::setprecision(3);
         std::cout << "GFSS CUDA structured-Q1 operator benchmark\n"
@@ -211,6 +214,7 @@ int main(int argc, char** argv) {
         print_gpu("gpu_gold_sparse_32x4", sparse128, mesh.dof_count());
         print_gpu("gpu_gold_sparse_32x8", sparse256, mesh.dof_count());
         print_gpu("gpu_gold_sparse_32x16", sparse512, mesh.dof_count());
+        print_gpu("gpu_gold_shuffle_32x4", shuffle128, mesh.dof_count());
 
         std::cout << "best_node_speedup_vs_atomic=" << (best_node_mdof_s / atomic_mdof_s) << "x\n"
                   << "best_gold3d_speedup_vs_node=" << (best_gold3d_mdof_s / best_node_mdof_s) << "x\n"
@@ -219,6 +223,8 @@ int main(int argc, char** argv) {
                   << "best_gold_sparse_speedup_vs_gold3d=" << (best_sparse_mdof_s / best_gold3d_mdof_s) << "x\n"
                   << "best_gold_sparse_speedup_vs_atomic=" << (best_sparse_mdof_s / atomic_mdof_s) << "x\n"
                   << "best_gold_sparse_speedup_vs_cpu_gold_in_run=" << (best_sparse_mdof_s / cpu_mdof_s) << "x\n"
+                  << "gold_shuffle_speedup_vs_sparse32x4=" << (shuffle128_mdof_s / sparse128_mdof_s) << "x\n"
+                  << "gold_shuffle_speedup_vs_cpu_gold_in_run=" << (shuffle128_mdof_s / cpu_mdof_s) << "x\n"
                   << "atomic_device_vectors="
                   << (static_cast<double>(atomic.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << "node_device_vectors="
@@ -227,6 +233,8 @@ int main(int argc, char** argv) {
                   << (static_cast<double>(gold3d256.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << "gold_sparse_device_vectors="
                   << (static_cast<double>(sparse128.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
+                  << "gold_shuffle_device_vectors="
+                  << (static_cast<double>(shuffle128.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << std::scientific
                   << "cpu_gold_vs_oracle_rel_max=" << cpu_rel << '\n'
                   << "atomic_vs_oracle_rel_max=" << atomic_rel << '\n'
@@ -238,12 +246,14 @@ int main(int argc, char** argv) {
                   << "gold3d_32x16_vs_oracle_rel_max=" << gold512_rel << '\n'
                   << "gold_sparse_32x4_vs_oracle_rel_max=" << sparse128_rel << '\n'
                   << "gold_sparse_32x8_vs_oracle_rel_max=" << sparse256_rel << '\n'
-                  << "gold_sparse_32x16_vs_oracle_rel_max=" << sparse512_rel << '\n';
+                  << "gold_sparse_32x16_vs_oracle_rel_max=" << sparse512_rel << '\n'
+                  << "gold_shuffle_32x4_vs_oracle_rel_max=" << shuffle128_rel << '\n';
 
         if (cpu_rel >= 2.0e-5 || atomic_rel >= 2.0e-5 ||
             node128_rel >= 2.0e-5 || node256_rel >= 2.0e-5 || node512_rel >= 2.0e-5 ||
             gold128_rel >= 2.0e-5 || gold256_rel >= 2.0e-5 || gold512_rel >= 2.0e-5 ||
-            sparse128_rel >= 2.0e-5 || sparse256_rel >= 2.0e-5 || sparse512_rel >= 2.0e-5) {
+            sparse128_rel >= 2.0e-5 || sparse256_rel >= 2.0e-5 || sparse512_rel >= 2.0e-5 ||
+            shuffle128_rel >= 2.0e-5) {
             std::cerr << "ERROR: one or more optimized operators differ from FP64 oracle beyond tolerance\n";
             return 2;
         }
