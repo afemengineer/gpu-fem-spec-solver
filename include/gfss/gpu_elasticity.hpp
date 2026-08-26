@@ -55,4 +55,15 @@ CudaOperatorResult apply_node_stencil_cuda_gold3d(const StructuredHexMesh& mesh,
                                                   int repeats = 5,
                                                   int block_y = 8);
 
+// Gold3D launch geometry with the exact structural zeros removed from the
+// interior orthogonal HEX8 stencil: 153 FMAs/node instead of 243. Boundary
+// nodes retain the generic exact 27-class path. This is an arithmetic/
+// instruction-count experiment; vector layout and device-vector memory match
+// Gold3D.
+CudaOperatorResult apply_node_stencil_cuda_gold_sparse(const StructuredHexMesh& mesh,
+                                                       const Material& material,
+                                                       const std::vector<float>& x,
+                                                       int repeats = 5,
+                                                       int block_y = 16);
+
 }  // namespace gfss
