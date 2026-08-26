@@ -34,25 +34,26 @@ CudaOperatorResult apply_matrix_free_cuda_atomic(const StructuredHexMesh& mesh,
                                                  const std::vector<float>& x,
                                                  int repeats = 5);
 
-// Structured-Q1 performance path: one CUDA thread owns one output node, reads
-// the exact 27-class regular node stencil, and writes three SoA components.
-// There are no atomics and no output memset in the timed region. AoS<->SoA
-// host conversion, allocation, H2D, and D2H are setup/audit work and excluded.
 CudaOperatorResult apply_node_stencil_cuda_soa(const StructuredHexMesh& mesh,
                                                const Material& material,
                                                const std::vector<float>& x,
                                                int repeats = 5,
                                                int threads_per_block = 256);
 
-// Same mathematical node stencil with a topology-aware 3D CUDA launch.
-// x maps directly to a warp lane, so the hot path avoids integer div/mod used
-// to decode a linear node id. Interior nodes use a fixed 27-entry stencil with
-// precomputed linear neighbor offsets; exact 27-class handling remains for
-// boundary nodes. block_y controls 32 x block_y threads per block.
 CudaOperatorResult apply_node_stencil_cuda_gold3d(const StructuredHexMesh& mesh,
                                                   const Material& material,
                                                   const std::vector<float>& x,
                                                   int repeats = 5,
                                                   int block_y = 8);
+
+// Nsight-guided variant: launch the nx-1 by ny-1 by nz-1 interior separately
+// with a nearly perfectly packed 32x16 block geometry, then evaluate the small
+// boundary set with a compact exact kernel. This removes most padded lanes from
+// the 161x161 Gold3D launch while preserving the same operator mathematics.
+CudaOperatorResult apply_node_stencil_cuda_interior_split(
+    const StructuredHexMesh& mesh,
+    const Material& material,
+    const std::vector<float>& x,
+    int repeats = 5);
 
 }  // namespace gfss
