@@ -66,4 +66,14 @@ CudaOperatorResult apply_node_stencil_cuda_gold_sparse(const StructuredHexMesh& 
                                                        int repeats = 5,
                                                        int block_y = 16);
 
+// GoldSparse arithmetic with warp-register reuse along x. Full interior
+// 32-lane x-warps load only the dx=0 value for each of the nine yz planes and
+// obtain dx=+/-1 through warp shuffles; lane 0/31 fetch one halo value. Partial
+// x-warps and physical boundaries fall back to the proven sparse/generic paths.
+CudaOperatorResult apply_node_stencil_cuda_gold_shuffle(const StructuredHexMesh& mesh,
+                                                        const Material& material,
+                                                        const std::vector<float>& x,
+                                                        int repeats = 5,
+                                                        int block_y = 4);
+
 }  // namespace gfss
