@@ -96,13 +96,27 @@ if(GFSS_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         find_package(CUDAToolkit REQUIRED)
-        find_library(GFSS_CUBLAS_LIBRARY
-            NAMES cublas
-            HINTS
-                "${CUDAToolkit_LIBRARY_DIR}"
-                "${CUDAToolkit_ROOT}/lib/x64"
-            REQUIRED)
+
+        # CMake 3.24 plus newer CUDA toolkits can discover the toolkit while
+        # failing to expose CUDA::cublas. Derive the Windows import library
+        # directly from the nvcc path that CMake already validated.
+        if(WIN32)
+            get_filename_component(GFSS_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+            get_filename_component(GFSS_CUDA_ROOT "${GFSS_CUDA_BIN_DIR}" DIRECTORY)
+            set(GFSS_CUBLAS_LIBRARY "${GFSS_CUDA_ROOT}/lib/x64/cublas.lib")
+            if(NOT EXISTS "${GFSS_CUBLAS_LIBRARY}")
+                message(FATAL_ERROR
+                    "cuBLAS import library not found at ${GFSS_CUBLAS_LIBRARY}; "
+                    "nvcc is ${CMAKE_CUDA_COMPILER}")
+            endif()
+        else()
+            find_library(GFSS_CUBLAS_LIBRARY
+                NAMES cublas
+                HINTS "${CUDAToolkit_LIBRARY_DIR}"
+                REQUIRED)
+        endif()
         message(STATUS "cuBLAS library: ${GFSS_CUBLAS_LIBRARY}")
+
         list(APPEND GFSS_APP_SOURCES src/gpu_info.cu)
         set(GFSS_HAS_CUDA TRUE)
     else()
