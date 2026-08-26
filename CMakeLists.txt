@@ -95,6 +95,28 @@ if(GFSS_ENABLE_CUDA)
         enable_language(CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        find_package(CUDAToolkit REQUIRED)
+
+        # CMake 3.24 plus newer CUDA toolkits can discover the toolkit while
+        # failing to expose CUDA::cublas. Derive the Windows import library
+        # directly from the nvcc path that CMake already validated.
+        if(WIN32)
+            get_filename_component(GFSS_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+            get_filename_component(GFSS_CUDA_ROOT "${GFSS_CUDA_BIN_DIR}" DIRECTORY)
+            set(GFSS_CUBLAS_LIBRARY "${GFSS_CUDA_ROOT}/lib/x64/cublas.lib")
+            if(NOT EXISTS "${GFSS_CUBLAS_LIBRARY}")
+                message(FATAL_ERROR
+                    "cuBLAS import library not found at ${GFSS_CUBLAS_LIBRARY}; "
+                    "nvcc is ${CMAKE_CUDA_COMPILER}")
+            endif()
+        else()
+            find_library(GFSS_CUBLAS_LIBRARY
+                NAMES cublas
+                HINTS "${CUDAToolkit_LIBRARY_DIR}"
+                REQUIRED)
+        endif()
+        message(STATUS "cuBLAS library: ${GFSS_CUBLAS_LIBRARY}")
+
         list(APPEND GFSS_APP_SOURCES src/gpu_info.cu)
         set(GFSS_HAS_CUDA TRUE)
     else()
@@ -119,8 +141,9 @@ if(GFSS_HAS_CUDA)
         src/gpu_elasticity.cu
         src/gpu_gold_3d.cu
         src/gpu_gold_sparse.cu
+        src/gpu_pcg_audit.cu
     )
-    target_link_libraries(gfss_cuda_operator PUBLIC gfss_core)
+    target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     set_target_properties(gfss_cuda_operator PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 
@@ -131,6 +154,10 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_sparse_profile benchmarks/gpu_sparse_profile.cpp)
     target_link_libraries(gfss_gpu_sparse_profile PRIVATE gfss_cuda_operator gfss_core)
     target_include_directories(gfss_gpu_sparse_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_pcg_bench benchmarks/gpu_pcg_bench.cpp)
+    target_link_libraries(gfss_gpu_pcg_bench PRIVATE gfss_cuda_operator gfss_core)
+    target_include_directories(gfss_gpu_pcg_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
@@ -182,5 +209,9 @@ if(GFSS_BUILD_TESTS)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
         target_link_libraries(gfss_cuda_operator_test PRIVATE gfss_cuda_operator gfss_core)
         add_test(NAME cuda_operator COMMAND gfss_cuda_operator_test)
+
+        add_executable(gfss_gpu_pcg_test tests/gpu_pcg_test.cpp)
+        target_link_libraries(gfss_gpu_pcg_test PRIVATE gfss_cuda_operator gfss_core)
+        add_test(NAME gpu_pcg COMMAND gfss_gpu_pcg_test)
     endif()
 endif()
