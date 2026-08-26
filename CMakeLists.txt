@@ -86,6 +86,12 @@ else()
     message(WARNING "OpenMP was not found; CPU parallel operator will fall back to serial")
 endif()
 
+add_library(gfss_multigrid_reference STATIC
+    src/multigrid_reference.cpp
+)
+target_link_libraries(gfss_multigrid_reference PUBLIC gfss_core)
+target_include_directories(gfss_multigrid_reference PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 set(GFSS_APP_SOURCES src/main.cpp)
 
 if(GFSS_ENABLE_CUDA)
@@ -201,6 +207,10 @@ target_include_directories(gfss_cpu_gold_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_executable(gfss_cpu_gold_profile benchmarks/cpu_gold_profile.cpp)
 target_link_libraries(gfss_cpu_gold_profile PRIVATE gfss_core)
 target_include_directories(gfss_cpu_gold_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_geometric_vcycle_reference_bench benchmarks/geometric_vcycle_reference_bench.cpp)
+target_link_libraries(gfss_geometric_vcycle_reference_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_geometric_vcycle_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(GFSS_BUILD_TESTS)
     enable_testing()
