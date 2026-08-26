@@ -34,4 +34,14 @@ CudaOperatorResult apply_matrix_free_cuda_atomic(const StructuredHexMesh& mesh,
                                                  const std::vector<float>& x,
                                                  int repeats = 5);
 
+// Structured-Q1 performance path: one CUDA thread owns one output node, reads
+// the exact 27-class regular node stencil, and writes three SoA components.
+// There are no atomics and no output memset in the timed region. AoS<->SoA
+// host conversion, allocation, H2D, and D2H are setup/audit work and excluded.
+CudaOperatorResult apply_node_stencil_cuda_soa(const StructuredHexMesh& mesh,
+                                               const Material& material,
+                                               const std::vector<float>& x,
+                                               int repeats = 5,
+                                               int threads_per_block = 256);
+
 }  // namespace gfss
