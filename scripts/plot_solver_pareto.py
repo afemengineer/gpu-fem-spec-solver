@@ -129,6 +129,22 @@ def mark_frontier(points: list[Point]) -> list[Point]:
     return frontier
 
 
+def marker_size_map(points: list[Point]) -> tuple[dict[int, float], bool]:
+    values = [p.fme for p in points if p.valid and p.fme is not None and p.fme > 0.0]
+    if len(values) < 2 or math.isclose(min(values), max(values), rel_tol=1.0e-12):
+        return ({id(p): 70.0 for p in points}, False)
+    lo = math.log1p(min(values))
+    hi = math.log1p(max(values))
+    sizes: dict[int, float] = {}
+    for p in points:
+        if p.fme is None or p.fme <= 0.0:
+            sizes[id(p)] = 70.0
+        else:
+            u = (math.log1p(p.fme) - lo) / (hi - lo)
+            sizes[id(p)] = 45.0 + 125.0 * u
+    return sizes, True
+
+
 def export_csv(path: pathlib.Path, points: list[Point], reuse: int) -> None:
     fields = [
         "run_id", "solver_family", "solver_variant", "problem",
@@ -167,10 +183,11 @@ def print_summary(points: list[Point], frontier: list[Point], reuse: int) -> Non
     print(f"records_selected={len(points)} valid={sum(p.valid for p in points)} rhs_reuse={reuse}")
     print("pareto_frontier_upper_left:")
     for p in frontier:
+        work = "" if p.fme is None else f" FME={p.fme:.3f}"
         print(
             f"  {p.family}/{p.variant}: time_ms={p.time_ms:.6f} "
             f"capacity_MDOF_per_GiB={p.capacity:.6f} B_per_DOF={p.bpd:.6f} "
-            f"residual={p.residual:.6e}"
+            f"residual={p.residual:.6e}{work}"
         )
     if not frontier:
         print("  <none>")
@@ -186,6 +203,7 @@ def draw(points: list[Point], frontier: list[Point], output: pathlib.Path, reuse
     families = sorted({p.family for p in points})
     cmap = plt.get_cmap("tab10")
     colors = {family: cmap(i % 10) for i, family in enumerate(families)}
+    sizes, sizes_encode_work = marker_size_map(points)
     fig, ax = plt.subplots(figsize=(10.5, 6.5))
 
     for family in families:
@@ -193,7 +211,8 @@ def draw(points: list[Point], frontier: list[Point], output: pathlib.Path, reuse
         if group:
             ax.scatter(
                 [p.time_ms for p in group], [p.capacity for p in group],
-                s=70, alpha=0.82, label=family, color=colors[family]
+                s=[sizes[id(p)] for p in group], alpha=0.82,
+                label=family, color=colors[family]
             )
     if show_invalid:
         group = [p for p in points if not p.valid]
@@ -216,6 +235,9 @@ def draw(points: list[Point], frontier: list[Point], output: pathlib.Path, reuse
     )
     ax.set_xlabel("Time to verified tolerance (ms) — lower is better")
     ax.set_ylabel("Solver-state capacity (MDOF/GiB) — higher is better")
+    if sizes_encode_work:
+        ax.text(0.99, 0.01, "Marker area encodes fine-matvec-equivalent work",
+                transform=ax.transAxes, ha="right", va="bottom", fontsize=8, alpha=0.7)
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
