@@ -62,9 +62,17 @@ MixedRefinementResult solve_mixed_refinement_x0(
         result.converged = true;
         result.initial_relative_residual = 0.0;
         result.final_relative_residual = 0.0;
+        result.outer_relative_residuals.push_back(0.0);
         result.total_ms = 0.0;
         return result;
     }
+
+    const auto context_start = Clock::now();
+    GpuPcgContext correction_context(mesh, material, block_y);
+    const auto context_stop = Clock::now();
+    result.gpu_context_setup_ms =
+        std::chrono::duration<double, std::milli>(
+            context_stop - context_start).count();
 
     const double bnorm = std::sqrt(bnorm2);
     std::vector<double> residual(rhs.size(), 0.0);
@@ -87,6 +95,7 @@ MixedRefinementResult solve_mixed_refinement_x0(
             std::chrono::duration<double, std::milli>(
                 residual_stop - residual_start).count();
 
+        result.outer_relative_residuals.push_back(relative_residual);
         if (outer == 0U) {
             result.initial_relative_residual = relative_residual;
         }
@@ -115,13 +124,10 @@ MixedRefinementResult solve_mixed_refinement_x0(
         }
 
         const auto correction_wall_start = Clock::now();
-        const auto correction = solve_pcg_cuda_gold_sparse_x0(
-            mesh,
-            material,
+        const auto correction = correction_context.solve(
             residual_fp32,
             inner_relative_tolerance,
-            max_inner_iterations,
-            block_y);
+            max_inner_iterations);
         const auto correction_wall_stop = Clock::now();
 
         result.gpu_correction_wall_ms +=
