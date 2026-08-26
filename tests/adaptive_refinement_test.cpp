@@ -61,9 +61,8 @@ int main() {
             "outer residual history must include initial and final residuals");
 
     for (const auto& step : result.adaptive_steps) {
-        require(step.requested_inner_tolerance >= 1.0e-4 &&
-                    step.requested_inner_tolerance <= 2.0e-1,
-                "adaptive forcing must remain inside controller bounds");
+        require(step.requested_inner_tolerance == 0.0,
+                "economic controller must not request a fixed inner tolerance");
         require(step.inner_iterations > 0U,
                 "adaptive correction must perform inner iterations");
         require(step.inner_audits > 0U,
@@ -71,6 +70,12 @@ int main() {
         require(step.achieved_inner_residual > 0.0 &&
                     step.achieved_inner_residual < 0.9,
                 "adaptive correction must produce a useful audited residual");
+        require(step.predicted_outer_corrections > 0U,
+                "economic stop must estimate remaining correction count");
+        require(step.predicted_total_ms >= 0.0,
+                "economic predicted total cost must be non-negative");
+        require(step.economic_stop || step.inner_stagnated,
+                "adaptive correction must stop economically or on measured stagnation");
         require(step.inner_solve_ms > 0.0,
                 "adaptive correction timing must be positive");
     }
@@ -79,8 +84,8 @@ int main() {
               << result.outer_iterations
               << " inner_iterations=" << result.total_inner_iterations
               << " final_true_rel=" << result.final_relative_residual
-              << " first_eta="
-              << result.adaptive_steps.front().requested_inner_tolerance
+              << " first_selected_eta="
+              << result.adaptive_steps.front().achieved_inner_residual
               << " total_ms=" << result.total_ms << '\n';
     return 0;
 }
