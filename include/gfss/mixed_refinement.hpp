@@ -13,14 +13,19 @@ struct AdaptiveForcingStep {
     std::size_t inner_iterations{0};
     std::size_t inner_matvecs{0};
     std::size_t inner_audits{0};
+    std::size_t predicted_outer_corrections{0};
     bool inner_converged{false};
     bool inner_stagnated{false};
+    bool economic_stop{false};
     double outer_residual_before{0.0};
+    // Zero in the economic controller: there is deliberately no requested
+    // inner tolerance. Kept only so old result readers remain source-compatible.
     double requested_inner_tolerance{0.0};
     double achieved_inner_residual{0.0};
     double best_inner_residual{0.0};
     double outer_contraction{0.0};
     double estimated_contraction_gain{1.0};
+    double predicted_total_ms{0.0};
     double inner_solve_ms{0.0};
 };
 
@@ -43,10 +48,9 @@ struct MixedRefinementResult {
     double total_ms{0.0};
 };
 
-// Fixed-forcing mixed-precision defect correction retained as a reproducible
-// research baseline. The outer iterate and residual are FP64 and use the
-// trusted CPU matrix-free operator. Each correction equation is solved with
-// the reusable FP32 GPU GoldSparse Jacobi-PCG context.
+// Fixed-forcing mixed-precision defect correction retained as an experimental
+// baseline. The outer iterate/residual are FP64 and the inner correction uses
+// a reusable FP32 GPU GoldSparse Jacobi-PCG context.
 MixedRefinementResult solve_mixed_refinement_x0(
     const StructuredHexMesh& mesh,
     const Material& material,
@@ -57,14 +61,12 @@ MixedRefinementResult solve_mixed_refinement_x0(
     std::size_t max_inner_iterations = 1500,
     int block_y = 4);
 
-// Adaptive-forcing mixed refinement. The caller supplies only the true outer
-// accuracy target and resource limits. The first forcing term is derived from
-// the remaining outer reduction assuming three calibration corrections. After
-// each correction the controller learns the actual outer/inner contraction
-// gain and a local cost-vs-log-residual model from PCG audit samples. It then
-// chooses the next forcing term by minimizing predicted remaining correction
-// plus accurate-residual time. An unreachable FP32 target is treated as a
-// measured capability floor rather than a fatal solver error.
+// Self-tuning mixed-precision refinement. The user supplies only the true
+// outer tolerance. Each FP32 correction follows one uninterrupted PCG
+// trajectory and decides at audited residual milestones whether continuing
+// deeper is predicted to reduce total remaining solve time. The FP64 outer
+// residual measures the actual contraction and updates the gain used by the
+// next inner economic decision.
 MixedRefinementResult solve_mixed_refinement_adaptive_x0(
     const StructuredHexMesh& mesh,
     const Material& material,
