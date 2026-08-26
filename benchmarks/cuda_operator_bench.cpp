@@ -148,10 +148,10 @@ int main(int argc, char** argv) {
         const auto node128 = gfss::apply_node_stencil_cuda_soa(mesh, material, xf, repeats, 128);
         const auto node256 = gfss::apply_node_stencil_cuda_soa(mesh, material, xf, repeats, 256);
         const auto node512 = gfss::apply_node_stencil_cuda_soa(mesh, material, xf, repeats, 512);
-
         const auto gold3d128 = gfss::apply_node_stencil_cuda_gold3d(mesh, material, xf, repeats, 4);
         const auto gold3d256 = gfss::apply_node_stencil_cuda_gold3d(mesh, material, xf, repeats, 8);
         const auto gold3d512 = gfss::apply_node_stencil_cuda_gold3d(mesh, material, xf, repeats, 16);
+        const auto split = gfss::apply_node_stencil_cuda_interior_split(mesh, material, xf, repeats);
 
         const double cpu_mdof_s =
             static_cast<double>(mesh.dof_count()) / (cpu_timing.median_ms * 1.0e3);
@@ -162,6 +162,7 @@ int main(int argc, char** argv) {
         const double gold128_mdof_s = gpu_mdof_s(gold3d128, mesh.dof_count());
         const double gold256_mdof_s = gpu_mdof_s(gold3d256, mesh.dof_count());
         const double gold512_mdof_s = gpu_mdof_s(gold3d512, mesh.dof_count());
+        const double split_mdof_s = gpu_mdof_s(split, mesh.dof_count());
         const double best_node_mdof_s = std::max({node128_mdof_s, node256_mdof_s, node512_mdof_s});
         const double best_gold3d_mdof_s = std::max({gold128_mdof_s, gold256_mdof_s, gold512_mdof_s});
 
@@ -173,6 +174,7 @@ int main(int argc, char** argv) {
         const double gold128_rel = relative_max_difference(oracle, gold3d128.y);
         const double gold256_rel = relative_max_difference(oracle, gold3d256.y);
         const double gold512_rel = relative_max_difference(oracle, gold3d512.y);
+        const double split_rel = relative_max_difference(oracle, split.y);
 
         std::cout << std::fixed << std::setprecision(3);
         std::cout << "GFSS CUDA structured-Q1 operator benchmark\n"
@@ -197,17 +199,22 @@ int main(int argc, char** argv) {
         print_gpu("gpu_gold3d_32x4", gold3d128, mesh.dof_count());
         print_gpu("gpu_gold3d_32x8", gold3d256, mesh.dof_count());
         print_gpu("gpu_gold3d_32x16", gold3d512, mesh.dof_count());
+        print_gpu("gpu_interior_split_32x16", split, mesh.dof_count());
 
         std::cout << "best_node_speedup_vs_atomic=" << (best_node_mdof_s / atomic_mdof_s) << "x\n"
                   << "best_gold3d_speedup_vs_node=" << (best_gold3d_mdof_s / best_node_mdof_s) << "x\n"
                   << "best_gold3d_speedup_vs_atomic=" << (best_gold3d_mdof_s / atomic_mdof_s) << "x\n"
                   << "best_gold3d_speedup_vs_cpu_gold_in_run=" << (best_gold3d_mdof_s / cpu_mdof_s) << "x\n"
+                  << "interior_split_speedup_vs_gold3d=" << (split_mdof_s / best_gold3d_mdof_s) << "x\n"
+                  << "interior_split_speedup_vs_cpu_gold_in_run=" << (split_mdof_s / cpu_mdof_s) << "x\n"
                   << "atomic_device_vectors="
                   << (static_cast<double>(atomic.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << "node_device_vectors="
                   << (static_cast<double>(node256.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << "gold3d_device_vectors="
                   << (static_cast<double>(gold3d256.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
+                  << "interior_split_device_vectors="
+                  << (static_cast<double>(split.device_bytes) / (1024.0 * 1024.0)) << " MiB\n"
                   << std::scientific
                   << "cpu_gold_vs_oracle_rel_max=" << cpu_rel << '\n'
                   << "atomic_vs_oracle_rel_max=" << atomic_rel << '\n'
@@ -216,11 +223,13 @@ int main(int argc, char** argv) {
                   << "node512_vs_oracle_rel_max=" << node512_rel << '\n'
                   << "gold3d_32x4_vs_oracle_rel_max=" << gold128_rel << '\n'
                   << "gold3d_32x8_vs_oracle_rel_max=" << gold256_rel << '\n'
-                  << "gold3d_32x16_vs_oracle_rel_max=" << gold512_rel << '\n';
+                  << "gold3d_32x16_vs_oracle_rel_max=" << gold512_rel << '\n'
+                  << "interior_split_vs_oracle_rel_max=" << split_rel << '\n';
 
         if (cpu_rel >= 2.0e-5 || atomic_rel >= 2.0e-5 ||
             node128_rel >= 2.0e-5 || node256_rel >= 2.0e-5 || node512_rel >= 2.0e-5 ||
-            gold128_rel >= 2.0e-5 || gold256_rel >= 2.0e-5 || gold512_rel >= 2.0e-5) {
+            gold128_rel >= 2.0e-5 || gold256_rel >= 2.0e-5 || gold512_rel >= 2.0e-5 ||
+            split_rel >= 2.0e-5) {
             std::cerr << "ERROR: one or more optimized operators differ from FP64 oracle beyond tolerance\n";
             return 2;
         }
