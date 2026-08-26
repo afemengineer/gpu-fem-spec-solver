@@ -1,4 +1,4 @@
-#include "gfss/gpu_elasticity.hpp"
+﻿#include "gfss/gpu_elasticity.hpp"
 
 #include "gfss/cpu_gold.hpp"
 
@@ -112,7 +112,7 @@ __global__ void node_stencil_gold_sparse_kernel(
     float out_z = 0.0f;
 
     if (i != 0U && i != nx && j != 0U && j != ny && k != 0U && k != nz) {
-#pragma unroll 1
+#pragma unroll
         for (int e = 0; e < 7; ++e) {
             const DeviceDiagEntry entry = kSparseDiag[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
@@ -121,7 +121,7 @@ __global__ void node_stencil_gold_sparse_kernel(
             out_z = fmaf(entry.b22, uz[neighbor], out_z);
         }
 
-#pragma unroll 1
+#pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeXYEntry entry = kSparseEdgeXY[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
@@ -135,7 +135,7 @@ __global__ void node_stencil_gold_sparse_kernel(
             out_z = fmaf(entry.b22, x2, out_z);
         }
 
-#pragma unroll 1
+#pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeXZEntry entry = kSparseEdgeXZ[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
@@ -149,7 +149,7 @@ __global__ void node_stencil_gold_sparse_kernel(
             out_z = fmaf(entry.b22, x2, out_z);
         }
 
-#pragma unroll 1
+#pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeYZEntry entry = kSparseEdgeYZ[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
@@ -163,7 +163,7 @@ __global__ void node_stencil_gold_sparse_kernel(
             out_z = fmaf(entry.b22, x2, out_z);
         }
 
-#pragma unroll 1
+#pragma unroll
         for (int e = 0; e < 8; ++e) {
             const DeviceCornerEntry entry = kSparseCorner[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
@@ -481,3 +481,4 @@ CudaOperatorResult apply_node_stencil_cuda_gold_sparse(
 }
 
 }  // namespace gfss
+
