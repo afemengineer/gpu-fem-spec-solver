@@ -104,16 +104,26 @@ int main(int argc, char** argv) {
                   << "initial_true_relative_residual="
                   << result.initial_relative_residual << '\n'
                   << "final_true_relative_residual="
-                  << result.final_relative_residual << '\n'
-                  << std::fixed
+                  << result.final_relative_residual << '\n';
+
+        for (std::size_t i = 0;
+             i < result.outer_relative_residuals.size();
+             ++i) {
+            std::cout << "outer_residual[" << i << "]="
+                      << result.outer_relative_residuals[i] << '\n';
+        }
+
+        std::cout << std::fixed
                   << "accurate_residual_ms=" << result.accurate_residual_ms << '\n'
+                  << "gpu_context_setup_ms="
+                  << result.gpu_context_setup_ms << '\n'
                   << "gpu_correction_solve_ms="
                   << result.gpu_correction_solve_ms << '\n'
                   << "gpu_correction_wall_ms="
                   << result.gpu_correction_wall_ms << '\n'
                   << "total_ms=" << result.total_ms << '\n'
                   << "outer_residual=cpu_fp64_matrix_free\n"
-                  << "inner_correction=gpu_fp32_goldsparse_jacobi_pcg\n";
+                  << "inner_correction=gpu_fp32_goldsparse_jacobi_pcg_persistent\n";
 
         if (!result.converged) {
             std::cerr << "WARNING: mixed refinement did not reach the requested outer tolerance\n";
