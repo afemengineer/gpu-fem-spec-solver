@@ -44,4 +44,15 @@ CudaOperatorResult apply_node_stencil_cuda_soa(const StructuredHexMesh& mesh,
                                                int repeats = 5,
                                                int threads_per_block = 256);
 
+// Same mathematical node stencil with a topology-aware 3D CUDA launch.
+// x maps directly to a warp lane, so the hot path avoids integer div/mod used
+// to decode a linear node id. Interior nodes use a fixed 27-entry stencil with
+// precomputed linear neighbor offsets; exact 27-class handling remains for
+// boundary nodes. block_y controls 32 x block_y threads per block.
+CudaOperatorResult apply_node_stencil_cuda_gold3d(const StructuredHexMesh& mesh,
+                                                  const Material& material,
+                                                  const std::vector<float>& x,
+                                                  int repeats = 5,
+                                                  int block_y = 8);
+
 }  // namespace gfss
