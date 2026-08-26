@@ -98,29 +98,29 @@ __global__ void node_stencil_gold_sparse_kernel(
     const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     const std::uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
     const std::uint32_t k = blockIdx.z;
-
     if (i > nx || j > ny || k > nz) {
         return;
     }
-
     const std::uint32_t sx = nx + 1U;
     const std::uint32_t sy = ny + 1U;
     const std::uint32_t node = i + sx * (j + sy * k);
-
-    float out_x = 0.0f;
-    float out_y = 0.0f;
-    float out_z = 0.0f;
-
-    if (i != 0U && i != nx && j != 0U && j != ny && k != 0U && k != nz) {
+    float out_x0 = 0.0f;
+    float out_y0 = 0.0f;
+    float out_z0 = 0.0f;
+    float out_x1 = 0.0f;
+    float out_y1 = 0.0f;
+    float out_z1 = 0.0f;
+    if (i != 0U && i != nx &&
+        j != 0U && j != ny &&
+        k != 0U && k != nz) {
 #pragma unroll
         for (int e = 0; e < 7; ++e) {
             const DeviceDiagEntry entry = kSparseDiag[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
-            out_x = fmaf(entry.b00, ux[neighbor], out_x);
-            out_y = fmaf(entry.b11, uy[neighbor], out_y);
-            out_z = fmaf(entry.b22, uz[neighbor], out_z);
+            out_x0 = fmaf(entry.b00, ux[neighbor], out_x0);
+            out_y0 = fmaf(entry.b11, uy[neighbor], out_y0);
+            out_z0 = fmaf(entry.b22, uz[neighbor], out_z0);
         }
-
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeXYEntry entry = kSparseEdgeXY[e];
@@ -128,13 +128,12 @@ __global__ void node_stencil_gold_sparse_kernel(
             const float x0 = ux[neighbor];
             const float x1 = uy[neighbor];
             const float x2 = uz[neighbor];
-            out_x = fmaf(entry.b00, x0, out_x);
-            out_x = fmaf(entry.b01, x1, out_x);
-            out_y = fmaf(entry.b10, x0, out_y);
-            out_y = fmaf(entry.b11, x1, out_y);
-            out_z = fmaf(entry.b22, x2, out_z);
+            out_x0 = fmaf(entry.b00, x0, out_x0);
+            out_x0 = fmaf(entry.b01, x1, out_x0);
+            out_y0 = fmaf(entry.b10, x0, out_y0);
+            out_y0 = fmaf(entry.b11, x1, out_y0);
+            out_z0 = fmaf(entry.b22, x2, out_z0);
         }
-
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeXZEntry entry = kSparseEdgeXZ[e];
@@ -142,13 +141,12 @@ __global__ void node_stencil_gold_sparse_kernel(
             const float x0 = ux[neighbor];
             const float x1 = uy[neighbor];
             const float x2 = uz[neighbor];
-            out_x = fmaf(entry.b00, x0, out_x);
-            out_x = fmaf(entry.b02, x2, out_x);
-            out_y = fmaf(entry.b11, x1, out_y);
-            out_z = fmaf(entry.b20, x0, out_z);
-            out_z = fmaf(entry.b22, x2, out_z);
+            out_x1 = fmaf(entry.b00, x0, out_x1);
+            out_x1 = fmaf(entry.b02, x2, out_x1);
+            out_y1 = fmaf(entry.b11, x1, out_y1);
+            out_z1 = fmaf(entry.b20, x0, out_z1);
+            out_z1 = fmaf(entry.b22, x2, out_z1);
         }
-
 #pragma unroll
         for (int e = 0; e < 4; ++e) {
             const DeviceEdgeYZEntry entry = kSparseEdgeYZ[e];
@@ -156,64 +154,84 @@ __global__ void node_stencil_gold_sparse_kernel(
             const float x0 = ux[neighbor];
             const float x1 = uy[neighbor];
             const float x2 = uz[neighbor];
-            out_x = fmaf(entry.b00, x0, out_x);
-            out_y = fmaf(entry.b11, x1, out_y);
-            out_y = fmaf(entry.b12, x2, out_y);
-            out_z = fmaf(entry.b21, x1, out_z);
-            out_z = fmaf(entry.b22, x2, out_z);
+            out_x1 = fmaf(entry.b00, x0, out_x1);
+            out_y1 = fmaf(entry.b11, x1, out_y1);
+            out_y1 = fmaf(entry.b12, x2, out_y1);
+            out_z1 = fmaf(entry.b21, x1, out_z1);
+            out_z1 = fmaf(entry.b22, x2, out_z1);
         }
-
 #pragma unroll
-        for (int e = 0; e < 8; ++e) {
+        for (int e = 0; e < 4; ++e) {
             const DeviceCornerEntry entry = kSparseCorner[e];
             const int neighbor = static_cast<int>(node) + entry.offset;
             const float x0 = ux[neighbor];
             const float x1 = uy[neighbor];
             const float x2 = uz[neighbor];
             const float* b = entry.block;
-            out_x = fmaf(b[0], x0, out_x);
-            out_x = fmaf(b[1], x1, out_x);
-            out_x = fmaf(b[2], x2, out_x);
-            out_y = fmaf(b[3], x0, out_y);
-            out_y = fmaf(b[4], x1, out_y);
-            out_y = fmaf(b[5], x2, out_y);
-            out_z = fmaf(b[6], x0, out_z);
-            out_z = fmaf(b[7], x1, out_z);
-            out_z = fmaf(b[8], x2, out_z);
+            out_x0 = fmaf(b[0], x0, out_x0);
+            out_x0 = fmaf(b[1], x1, out_x0);
+            out_x0 = fmaf(b[2], x2, out_x0);
+            out_y0 = fmaf(b[3], x0, out_y0);
+            out_y0 = fmaf(b[4], x1, out_y0);
+            out_y0 = fmaf(b[5], x2, out_y0);
+            out_z0 = fmaf(b[6], x0, out_z0);
+            out_z0 = fmaf(b[7], x1, out_z0);
+            out_z0 = fmaf(b[8], x2, out_z0);
+        }
+#pragma unroll
+        for (int e = 4; e < 8; ++e) {
+            const DeviceCornerEntry entry = kSparseCorner[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            const float* b = entry.block;
+            out_x1 = fmaf(b[0], x0, out_x1);
+            out_x1 = fmaf(b[1], x1, out_x1);
+            out_x1 = fmaf(b[2], x2, out_x1);
+            out_y1 = fmaf(b[3], x0, out_y1);
+            out_y1 = fmaf(b[4], x1, out_y1);
+            out_y1 = fmaf(b[5], x2, out_y1);
+            out_z1 = fmaf(b[6], x0, out_z1);
+            out_z1 = fmaf(b[7], x1, out_z1);
+            out_z1 = fmaf(b[8], x2, out_z1);
         }
     } else {
-        const int cls = axis_class_sparse(i, nx) +
-                        3 * (axis_class_sparse(j, ny) +
-                             3 * axis_class_sparse(k, nz));
-        const int count = static_cast<int>(kSparseBoundaryCounts[cls]);
+        const int cls =
+            axis_class_sparse(i, nx) +
+            3 * (axis_class_sparse(j, ny) +
+                 3 * axis_class_sparse(k, nz));
+        const int count =
+            static_cast<int>(kSparseBoundaryCounts[cls]);
 #pragma unroll 1
         for (int e = 0; e < count; ++e) {
             const DeviceNodeStencilEntrySparse& entry =
                 kSparseBoundaryEntries[cls * 27 + e];
             const int neighbor =
-                static_cast<int>(node) + static_cast<int>(entry.dx) +
+                static_cast<int>(node) +
+                static_cast<int>(entry.dx) +
                 static_cast<int>(sx) *
                     (static_cast<int>(entry.dy) +
-                     static_cast<int>(sy) * static_cast<int>(entry.dz));
+                     static_cast<int>(sy) *
+                         static_cast<int>(entry.dz));
             const float x0 = ux[neighbor];
             const float x1 = uy[neighbor];
             const float x2 = uz[neighbor];
             const float* b = entry.block;
-            out_x = fmaf(b[0], x0, out_x);
-            out_x = fmaf(b[1], x1, out_x);
-            out_x = fmaf(b[2], x2, out_x);
-            out_y = fmaf(b[3], x0, out_y);
-            out_y = fmaf(b[4], x1, out_y);
-            out_y = fmaf(b[5], x2, out_y);
-            out_z = fmaf(b[6], x0, out_z);
-            out_z = fmaf(b[7], x1, out_z);
-            out_z = fmaf(b[8], x2, out_z);
+            out_x0 = fmaf(b[0], x0, out_x0);
+            out_x0 = fmaf(b[1], x1, out_x0);
+            out_x0 = fmaf(b[2], x2, out_x0);
+            out_y0 = fmaf(b[3], x0, out_y0);
+            out_y0 = fmaf(b[4], x1, out_y0);
+            out_y0 = fmaf(b[5], x2, out_y0);
+            out_z0 = fmaf(b[6], x0, out_z0);
+            out_z0 = fmaf(b[7], x1, out_z0);
+            out_z0 = fmaf(b[8], x2, out_z0);
         }
     }
-
-    yx[node] = out_x;
-    yy[node] = out_y;
-    yz[node] = out_z;
+    yx[node] = out_x0 + out_x1;
+    yy[node] = out_y0 + out_y1;
+    yz[node] = out_z0 + out_z1;
 }
 
 void upload_gold_sparse_stencil(const StructuredHexMesh& mesh,
@@ -481,4 +499,5 @@ CudaOperatorResult apply_node_stencil_cuda_gold_sparse(
 }
 
 }  // namespace gfss
+
 
