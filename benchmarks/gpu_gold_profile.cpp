@@ -1,5 +1,6 @@
 #include "gfss/gpu_elasticity.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
