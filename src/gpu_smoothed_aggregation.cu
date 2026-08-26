@@ -40,7 +40,7 @@ enum class TimedStage {
 };
 
 __device__ __forceinline__ void aggregate_basis_values(
-    const DeviceAggregateSa& aggregate,
+    const DeviceAggregateSa* aggregate,
     float x,
     float y,
     float z,
@@ -48,78 +48,110 @@ __device__ __forceinline__ void aggregate_basis_values(
     float& bx,
     float& by,
     float& bz) {
-    const float* t = aggregate.transform + 6U * q;
+    const float* t = aggregate->transform + 6U * q;
     bx = t[0] + z * t[4] - y * t[5];
     by = t[1] - z * t[3] + x * t[5];
     bz = t[2] + y * t[3] - x * t[4];
 }
 
-__global__ void tentative_prolongation_sa_kernel(
+// One warp owns one aggregate. The aggregate metadata and coarse coefficients
+// are shared by all of its nodes, and every fine node has exactly one owner.
+// This turns tentative prolongation from node->aggregate random lookup into a
+// compact aggregate->nodes traversal with direct, non-atomic fine writes.
+__global__ void tentative_prolongation_aggregate_sa_kernel(
     std::size_t nodes,
-    std::uint32_t aggregate_count,
-    const std::uint32_t* __restrict__ aggregate_of_node,
+    const std::uint32_t* __restrict__ aggregate_offsets,
+    const std::uint32_t* __restrict__ aggregate_nodes,
     const DeviceAggregateSa* __restrict__ aggregates,
     const float* __restrict__ coordinates,
     const float* __restrict__ coarse,
     float* __restrict__ fine) {
-    const std::size_t node =
-        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (node >= nodes) return;
+    const std::uint32_t aggregate_id = blockIdx.x;
+    const DeviceAggregateSa* aggregate = aggregates + aggregate_id;
+    const std::uint32_t first = aggregate_offsets[aggregate_id];
+    const std::uint32_t last = aggregate_offsets[aggregate_id + 1U];
 
-    const auto aggregate_id = aggregate_of_node[node];
-    float ux = 0.0f;
-    float uy = 0.0f;
-    float uz = 0.0f;
-    if (aggregate_id < aggregate_count) {
-        const DeviceAggregateSa aggregate = aggregates[aggregate_id];
-        const float x = (coordinates[node] - aggregate.centroid[0]) * aggregate.inv_scale;
-        const float y = (coordinates[nodes + node] - aggregate.centroid[1]) * aggregate.inv_scale;
-        const float z = (coordinates[2U * nodes + node] - aggregate.centroid[2]) * aggregate.inv_scale;
-        for (std::uint32_t q = 0; q < aggregate.rank; ++q) {
+    __shared__ float coarse_local[6];
+    if (threadIdx.x < aggregate->rank) {
+        coarse_local[threadIdx.x] = coarse[aggregate->coarse_offset + threadIdx.x];
+    }
+    __syncwarp();
+
+    for (std::uint32_t p = first + threadIdx.x; p < last; p += blockDim.x) {
+        const std::size_t node = aggregate_nodes[p];
+        const float x = (coordinates[node] - aggregate->centroid[0]) * aggregate->inv_scale;
+        const float y = (coordinates[nodes + node] - aggregate->centroid[1]) * aggregate->inv_scale;
+        const float z = (coordinates[2U * nodes + node] - aggregate->centroid[2]) * aggregate->inv_scale;
+
+        float ux = 0.0f;
+        float uy = 0.0f;
+        float uz = 0.0f;
+        for (std::uint32_t q = 0; q < aggregate->rank; ++q) {
             float bx = 0.0f;
             float by = 0.0f;
             float bz = 0.0f;
             aggregate_basis_values(aggregate, x, y, z, q, bx, by, bz);
-            const float c = coarse[aggregate.coarse_offset + q];
+            const float c = coarse_local[q];
             ux = fmaf(bx, c, ux);
             uy = fmaf(by, c, uy);
             uz = fmaf(bz, c, uz);
         }
+        fine[node] = ux;
+        fine[nodes + node] = uy;
+        fine[2U * nodes + node] = uz;
     }
-    fine[node] = ux;
-    fine[nodes + node] = uy;
-    fine[2U * nodes + node] = uz;
 }
 
-__global__ void tentative_restriction_sa_kernel(
+// Exact transpose of the aggregate-owned P0 kernel. Every block owns every
+// coarse DOF of one aggregate, so node contributions can be reduced inside a
+// warp and written once. No global atomicAdd and no coarse-vector memset are
+// required.
+__global__ void tentative_restriction_aggregate_sa_kernel(
     std::size_t nodes,
-    std::uint32_t aggregate_count,
-    const std::uint32_t* __restrict__ aggregate_of_node,
+    const std::uint32_t* __restrict__ aggregate_offsets,
+    const std::uint32_t* __restrict__ aggregate_nodes,
     const DeviceAggregateSa* __restrict__ aggregates,
     const float* __restrict__ coordinates,
     const float* __restrict__ fine,
     float* __restrict__ coarse) {
-    const std::size_t node =
-        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (node >= nodes) return;
+    const std::uint32_t aggregate_id = blockIdx.x;
+    const DeviceAggregateSa* aggregate = aggregates + aggregate_id;
+    const std::uint32_t first = aggregate_offsets[aggregate_id];
+    const std::uint32_t last = aggregate_offsets[aggregate_id + 1U];
 
-    const auto aggregate_id = aggregate_of_node[node];
-    if (aggregate_id >= aggregate_count) return;
-    const DeviceAggregateSa aggregate = aggregates[aggregate_id];
-    const float x = (coordinates[node] - aggregate.centroid[0]) * aggregate.inv_scale;
-    const float y = (coordinates[nodes + node] - aggregate.centroid[1]) * aggregate.inv_scale;
-    const float z = (coordinates[2U * nodes + node] - aggregate.centroid[2]) * aggregate.inv_scale;
-    const float fx = fine[node];
-    const float fy = fine[nodes + node];
-    const float fz = fine[2U * nodes + node];
+    float sums[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    for (std::uint32_t p = first + threadIdx.x; p < last; p += blockDim.x) {
+        const std::size_t node = aggregate_nodes[p];
+        const float x = (coordinates[node] - aggregate->centroid[0]) * aggregate->inv_scale;
+        const float y = (coordinates[nodes + node] - aggregate->centroid[1]) * aggregate->inv_scale;
+        const float z = (coordinates[2U * nodes + node] - aggregate->centroid[2]) * aggregate->inv_scale;
+        const float fx = fine[node];
+        const float fy = fine[nodes + node];
+        const float fz = fine[2U * nodes + node];
 
-    for (std::uint32_t q = 0; q < aggregate.rank; ++q) {
-        float bx = 0.0f;
-        float by = 0.0f;
-        float bz = 0.0f;
-        aggregate_basis_values(aggregate, x, y, z, q, bx, by, bz);
-        const float value = bx * fx + by * fy + bz * fz;
-        atomicAdd(coarse + aggregate.coarse_offset + q, value);
+        for (std::uint32_t q = 0; q < aggregate->rank; ++q) {
+            float bx = 0.0f;
+            float by = 0.0f;
+            float bz = 0.0f;
+            aggregate_basis_values(aggregate, x, y, z, q, bx, by, bz);
+            sums[q] = fmaf(bx, fx, sums[q]);
+            sums[q] = fmaf(by, fy, sums[q]);
+            sums[q] = fmaf(bz, fz, sums[q]);
+        }
+    }
+
+    constexpr unsigned int mask = 0xffffffffU;
+    for (int delta = 16; delta > 0; delta >>= 1) {
+#pragma unroll
+        for (int q = 0; q < 6; ++q) {
+            sums[q] += __shfl_down_sync(mask, sums[q], delta);
+        }
+    }
+
+    if (threadIdx.x == 0U) {
+        for (std::uint32_t q = 0; q < aggregate->rank; ++q) {
+            coarse[aggregate->coarse_offset + q] = sums[q];
+        }
     }
 }
 
@@ -135,36 +167,44 @@ __global__ void axpy_negative_sa_kernel(
     }
 }
 
-void launch_p0(std::size_t nodes,
+void launch_p0(const StructuredHexMesh& mesh,
+               std::size_t nodes,
                std::uint32_t aggregate_count,
-               const std::uint32_t* aggregate_of_node,
+               const std::uint32_t* aggregate_offsets,
+               const std::uint32_t* aggregate_nodes,
                const DeviceAggregateSa* aggregates,
                const float* coordinates,
                const float* coarse,
                float* fine) {
-    constexpr unsigned int threads = 256U;
-    const auto blocks = static_cast<unsigned int>(
-        (nodes + threads - 1U) / threads);
-    tentative_prolongation_sa_kernel<<<blocks, threads>>>(
-        nodes, aggregate_count, aggregate_of_node, aggregates,
+    constexpr unsigned int threads = 32U;
+    tentative_prolongation_aggregate_sa_kernel<<<aggregate_count, threads>>>(
+        nodes, aggregate_offsets, aggregate_nodes, aggregates,
         coordinates, coarse, fine);
-    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation P0 launch");
+    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation aggregate P0 launch");
+
+    // Aggregates contain only free nodes. Preserve exact x=0 Dirichlet values
+    // without a full fine-vector memset.
+    const std::uint32_t face_nodes = (mesh.ny + 1U) * (mesh.nz + 1U);
+    constexpr unsigned int clamp_threads = 256U;
+    const unsigned int clamp_blocks = (face_nodes + clamp_threads - 1U) / clamp_threads;
+    zero_x0_face_pcg_kernel<<<clamp_blocks, clamp_threads>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, fine);
+    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation P0 clamp launch");
 }
 
 void launch_p0t(std::size_t nodes,
                 std::uint32_t aggregate_count,
-                const std::uint32_t* aggregate_of_node,
+                const std::uint32_t* aggregate_offsets,
+                const std::uint32_t* aggregate_nodes,
                 const DeviceAggregateSa* aggregates,
                 const float* coordinates,
                 const float* fine,
                 float* coarse) {
-    constexpr unsigned int threads = 256U;
-    const auto blocks = static_cast<unsigned int>(
-        (nodes + threads - 1U) / threads);
-    tentative_restriction_sa_kernel<<<blocks, threads>>>(
-        nodes, aggregate_count, aggregate_of_node, aggregates,
+    constexpr unsigned int threads = 32U;
+    tentative_restriction_aggregate_sa_kernel<<<aggregate_count, threads>>>(
+        nodes, aggregate_offsets, aggregate_nodes, aggregates,
         coordinates, fine, coarse);
-    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation P0T launch");
+    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation aggregate P0T launch");
 }
 
 void launch_negative_axpy(std::size_t n,
@@ -248,7 +288,8 @@ struct GpuSmoothedAggregationContext::Impl {
     std::size_t coarse_dof_count{0};
     std::uint32_t aggregate_count{0};
 
-    std::uint32_t* d_aggregate_of_node{nullptr};
+    std::uint32_t* d_aggregate_offsets{nullptr};
+    std::uint32_t* d_aggregate_nodes{nullptr};
     DeviceAggregateSa* d_aggregates{nullptr};
     float* d_coordinates{nullptr};
     float* d_coarse_x{nullptr};
@@ -286,8 +327,9 @@ struct GpuSmoothedAggregationContext::Impl {
             throw std::invalid_argument("GPU smoothed aggregation coarse space/mesh mismatch");
         }
         if (space.aggregates.size() > std::numeric_limits<std::uint32_t>::max() ||
-            coarse_dof_count > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::invalid_argument("GPU smoothed aggregation currently requires 32-bit coarse indexing");
+            coarse_dof_count > std::numeric_limits<std::uint32_t>::max() ||
+            nodes > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::invalid_argument("GPU smoothed aggregation currently requires 32-bit indexing");
         }
         aggregate_count = static_cast<std::uint32_t>(space.aggregates.size());
 
@@ -311,6 +353,39 @@ struct GpuSmoothedAggregationContext::Impl {
             }
         }
 
+        // Invert node->aggregate ownership once during setup. Constrained nodes
+        // have no aggregate and are intentionally absent from the compact list.
+        std::vector<std::uint32_t> host_aggregate_offsets(
+            static_cast<std::size_t>(aggregate_count) + 1U, 0U);
+        std::size_t owned_nodes = 0U;
+        for (std::size_t node = 0; node < nodes; ++node) {
+            const auto a = space.aggregate_of_node[node];
+            if (a >= aggregate_count) continue;
+            ++host_aggregate_offsets[static_cast<std::size_t>(a) + 1U];
+            ++owned_nodes;
+        }
+        for (std::size_t a = 0; a < aggregate_count; ++a) {
+            host_aggregate_offsets[a + 1U] += host_aggregate_offsets[a];
+        }
+        if (owned_nodes != space.free_nodes ||
+            host_aggregate_offsets.back() != owned_nodes) {
+            throw std::runtime_error("GPU smoothed aggregation aggregate ownership count mismatch");
+        }
+
+        std::vector<std::uint32_t> host_aggregate_nodes(owned_nodes, 0U);
+        auto cursor = host_aggregate_offsets;
+        for (std::size_t node = 0; node < nodes; ++node) {
+            const auto a = space.aggregate_of_node[node];
+            if (a >= aggregate_count) continue;
+            host_aggregate_nodes[cursor[a]++] = static_cast<std::uint32_t>(node);
+        }
+        for (std::size_t a = 0; a < aggregate_count; ++a) {
+            const std::size_t count = host_aggregate_offsets[a + 1U] - host_aggregate_offsets[a];
+            if (count == 0U) {
+                throw std::runtime_error("GPU smoothed aggregation found empty aggregate");
+            }
+        }
+
         std::vector<float> host_coordinates(3U * nodes, 0.0f);
         for (std::size_t node = 0; node < nodes; ++node) {
             host_coordinates[node] = static_cast<float>(space.graph.coordinates[node][0]);
@@ -318,17 +393,20 @@ struct GpuSmoothedAggregationContext::Impl {
             host_coordinates[2U * nodes + node] = static_cast<float>(space.graph.coordinates[node][2]);
         }
 
-        const std::size_t aggregate_map_bytes = nodes * sizeof(std::uint32_t);
+        const std::size_t aggregate_offset_bytes = host_aggregate_offsets.size() * sizeof(std::uint32_t);
+        const std::size_t aggregate_node_bytes = host_aggregate_nodes.size() * sizeof(std::uint32_t);
         const std::size_t aggregate_bytes = host_aggregates.size() * sizeof(DeviceAggregateSa);
-        aggregation_metadata_bytes = aggregate_map_bytes + aggregate_bytes;
+        aggregation_metadata_bytes = aggregate_offset_bytes + aggregate_node_bytes + aggregate_bytes;
         model_coordinate_bytes = host_coordinates.size() * sizeof(float);
         fine_workspace_bytes = 3U * ndof * sizeof(float);
         coarse_workspace_bytes = 2U * coarse_dof_count * sizeof(float);
 
         try {
             upload_pcg_stencil(mesh, material);
-            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_aggregate_of_node), aggregate_map_bytes),
-                           "cudaMalloc(SA aggregate map)");
+            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_aggregate_offsets), aggregate_offset_bytes),
+                           "cudaMalloc(SA aggregate offsets)");
+            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_aggregate_nodes), aggregate_node_bytes),
+                           "cudaMalloc(SA aggregate nodes)");
             check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_aggregates), aggregate_bytes),
                            "cudaMalloc(SA aggregate metadata)");
             check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_coordinates), model_coordinate_bytes),
@@ -344,11 +422,16 @@ struct GpuSmoothedAggregationContext::Impl {
             check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_f2), ndof * sizeof(float)),
                            "cudaMalloc(SA fine f2)");
 
-            check_cuda_pcg(cudaMemcpy(d_aggregate_of_node,
-                                      space.aggregate_of_node.data(),
-                                      aggregate_map_bytes,
+            check_cuda_pcg(cudaMemcpy(d_aggregate_offsets,
+                                      host_aggregate_offsets.data(),
+                                      aggregate_offset_bytes,
                                       cudaMemcpyHostToDevice),
-                           "cudaMemcpy(SA aggregate map H2D)");
+                           "cudaMemcpy(SA aggregate offsets H2D)");
+            check_cuda_pcg(cudaMemcpy(d_aggregate_nodes,
+                                      host_aggregate_nodes.data(),
+                                      aggregate_node_bytes,
+                                      cudaMemcpyHostToDevice),
+                           "cudaMemcpy(SA aggregate nodes H2D)");
             check_cuda_pcg(cudaMemcpy(d_aggregates,
                                       host_aggregates.data(),
                                       aggregate_bytes,
@@ -368,7 +451,8 @@ struct GpuSmoothedAggregationContext::Impl {
     ~Impl() { cleanup(); }
 
     void cleanup() noexcept {
-        if (d_aggregate_of_node) cudaFree(d_aggregate_of_node);
+        if (d_aggregate_offsets) cudaFree(d_aggregate_offsets);
+        if (d_aggregate_nodes) cudaFree(d_aggregate_nodes);
         if (d_aggregates) cudaFree(d_aggregates);
         if (d_coordinates) cudaFree(d_coordinates);
         if (d_coarse_x) cudaFree(d_coarse_x);
@@ -376,7 +460,8 @@ struct GpuSmoothedAggregationContext::Impl {
         if (d_f0) cudaFree(d_f0);
         if (d_f1) cudaFree(d_f1);
         if (d_f2) cudaFree(d_f2);
-        d_aggregate_of_node = nullptr;
+        d_aggregate_offsets = nullptr;
+        d_aggregate_nodes = nullptr;
         d_aggregates = nullptr;
         d_coordinates = nullptr;
         d_coarse_x = nullptr;
@@ -402,7 +487,8 @@ struct GpuSmoothedAggregationContext::Impl {
                            "cudaEventRecord(SA start)");
         }
 
-        launch_p0(nodes, aggregate_count, d_aggregate_of_node, d_aggregates,
+        launch_p0(mesh, nodes, aggregate_count, d_aggregate_offsets,
+                  d_aggregate_nodes, d_aggregates,
                   d_coordinates, d_coarse_x, d_f0);
         mark(TimedStage::P0);
 
@@ -427,10 +513,8 @@ struct GpuSmoothedAggregationContext::Impl {
             mark(TimedStage::Update);
         }
 
-        check_cuda_pcg(cudaMemsetAsync(d_coarse_y, 0, coarse_dof_count * sizeof(float)),
-                       "cudaMemsetAsync(SA coarse y)");
-        mark(TimedStage::P0T);
-        launch_p0t(nodes, aggregate_count, d_aggregate_of_node, d_aggregates,
+        launch_p0t(nodes, aggregate_count, d_aggregate_offsets,
+                   d_aggregate_nodes, d_aggregates,
                    d_coordinates, d_f1, d_coarse_y);
         mark(TimedStage::P0T);
     }
@@ -474,7 +558,7 @@ GpuSmoothedAggregationApplyResult GpuSmoothedAggregationContext::apply(
     impl_->run_pipeline(transfer_smoothing_steps, nullptr, nullptr);
     check_cuda_pcg(cudaDeviceSynchronize(), "cudaDeviceSynchronize(SA warmup)");
 
-    const std::size_t intervals = 6U * transfer_smoothing_steps + 4U;
+    const std::size_t intervals = 6U * transfer_smoothing_steps + 3U;
     std::vector<cudaEvent_t> markers(intervals + 1U, nullptr);
     try {
         for (auto& event : markers) {
