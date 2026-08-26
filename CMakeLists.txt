@@ -118,6 +118,7 @@ if(GFSS_HAS_CUDA)
     add_library(gfss_cuda_operator STATIC
         src/gpu_elasticity.cu
         src/gpu_gold_3d.cu
+        src/gpu_gold_sparse.cu
     )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core)
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
