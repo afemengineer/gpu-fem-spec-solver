@@ -97,9 +97,6 @@ if(GFSS_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         find_package(CUDAToolkit REQUIRED)
 
-        # CMake 3.24 plus newer CUDA toolkits can discover the toolkit while
-        # failing to expose CUDA::cublas. Derive the Windows import library
-        # directly from the nvcc path that CMake already validated.
         if(WIN32)
             get_filename_component(GFSS_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
             get_filename_component(GFSS_CUDA_ROOT "${GFSS_CUDA_BIN_DIR}" DIRECTORY)
@@ -236,6 +233,10 @@ if(GFSS_BUILD_TESTS)
         add_executable(gfss_gpu_pcg_test tests/gpu_pcg_test.cpp)
         target_link_libraries(gfss_gpu_pcg_test PRIVATE gfss_cuda_operator gfss_core)
         add_test(NAME gpu_pcg COMMAND gfss_gpu_pcg_test)
+
+        add_executable(gfss_gpu_pcg_seeded_test tests/gpu_pcg_seeded_test.cpp)
+        target_link_libraries(gfss_gpu_pcg_seeded_test PRIVATE gfss_cuda_operator gfss_core)
+        add_test(NAME gpu_pcg_seeded COMMAND gfss_gpu_pcg_seeded_test)
 
         add_executable(gfss_adaptive_refinement_test tests/adaptive_refinement_test.cpp)
         target_link_libraries(gfss_adaptive_refinement_test PRIVATE gfss_mixed_refinement)
