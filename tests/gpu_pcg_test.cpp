@@ -81,7 +81,10 @@ int main() {
     require(cpu.converged, "trusted CPU CG must converge");
     require(gpu.converged, "GPU Jacobi-PCG must converge");
     require(gpu.iterations > 0U, "GPU PCG must perform iterations");
-    require(gpu.matvecs == gpu.iterations, "GPU PCG must perform one matvec per iteration");
+    require(gpu.residual_replacements > 0U,
+            "GPU PCG must verify convergence with at least one residual replacement");
+    require(gpu.matvecs == gpu.iterations + gpu.residual_replacements,
+            "GPU PCG matvec accounting must include residual replacements");
     require(gpu.solve_ms > 0.0, "GPU PCG solve timing must be positive");
     require(gpu.explicit_device_bytes == 6U * rhs.size() * sizeof(float),
             "GPU PCG explicit vector memory accounting mismatch");
@@ -90,9 +93,9 @@ int main() {
     const double solution_rel = relative_l2(cpu.x, gpu.x);
 
     require(gpu.reported_relative_residual <= 1.0e-5,
-            "GPU PCG recursive residual must meet requested tolerance");
+            "GPU PCG recomputed residual must meet requested tolerance");
     require(true_rel < 1.0e-4,
-            "GPU PCG true residual must remain close to recursive residual");
+            "GPU PCG true residual must remain close to recomputed FP32 residual");
     require(solution_rel < 1.0e-3,
             "GPU PCG solution must match trusted CPU CG solution");
 
@@ -107,6 +110,7 @@ int main() {
     }
 
     std::cout << "GPU PCG checks passed; iterations=" << gpu.iterations
+              << " replacements=" << gpu.residual_replacements
               << " reported_rel=" << gpu.reported_relative_residual
               << " true_rel=" << true_rel
               << " solution_rel_l2=" << solution_rel
