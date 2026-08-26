@@ -55,4 +55,16 @@ CudaOperatorResult apply_node_stencil_cuda_gold3d(const StructuredHexMesh& mesh,
                                                   int repeats = 5,
                                                   int block_y = 8);
 
+// Shared-memory structured stencil: a 32 x block_y x block_z output tile
+// cooperatively stages one-node halos and all three SoA components. Interior
+// threads reuse the staged 3x3x3 neighborhood; boundary nodes retain the exact
+// generic stencil. Allocation, transfers, layout conversion, and setup remain
+// outside the timed kernel region.
+CudaOperatorResult apply_node_stencil_cuda_shared_tile(const StructuredHexMesh& mesh,
+                                                       const Material& material,
+                                                       const std::vector<float>& x,
+                                                       int repeats = 5,
+                                                       int block_y = 8,
+                                                       int block_z = 2);
+
 }  // namespace gfss
