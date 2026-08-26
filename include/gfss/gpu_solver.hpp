@@ -4,6 +4,7 @@
 #include "gfss/structured_hex_mesh.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace gfss {
@@ -38,5 +39,34 @@ GpuPcgResult solve_pcg_cuda_gold_sparse_x0(
     double relative_tolerance = 1.0e-5,
     std::size_t max_iterations = 2000,
     int block_y = 4);
+
+// Reusable PCG device state for repeated correction solves on one mesh and
+// material. The constructor uploads stencil/Jacobi data, allocates the six
+// solver vectors, creates cuBLAS state, and warms the matvec path once. Each
+// solve() then reuses that state and only transfers the new RHS and returned
+// correction around the timed PCG iteration loop.
+class GpuPcgContext {
+public:
+    GpuPcgContext(const StructuredHexMesh& mesh,
+                  const Material& material,
+                  int block_y = 4);
+    ~GpuPcgContext();
+
+    GpuPcgContext(GpuPcgContext&&) noexcept;
+    GpuPcgContext& operator=(GpuPcgContext&&) noexcept;
+
+    GpuPcgContext(const GpuPcgContext&) = delete;
+    GpuPcgContext& operator=(const GpuPcgContext&) = delete;
+
+    GpuPcgResult solve(const std::vector<float>& rhs,
+                       double relative_tolerance = 1.0e-5,
+                       std::size_t max_iterations = 2000);
+
+    std::size_t explicit_device_bytes() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 }  // namespace gfss
