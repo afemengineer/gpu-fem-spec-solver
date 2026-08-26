@@ -223,6 +223,10 @@ add_executable(gfss_aggregation_coarse_operator_bench benchmarks/aggregation_coa
 target_link_libraries(gfss_aggregation_coarse_operator_bench PRIVATE gfss_multigrid_reference)
 target_include_directories(gfss_aggregation_coarse_operator_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_aggregation_coarse_storage_bench benchmarks/aggregation_coarse_storage_bench.cpp)
+target_link_libraries(gfss_aggregation_coarse_storage_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_coarse_storage_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
