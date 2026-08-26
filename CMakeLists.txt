@@ -142,6 +142,7 @@ if(GFSS_HAS_CUDA)
         src/gpu_gold_3d.cu
         src/gpu_gold_sparse.cu
         src/gpu_pcg_persistent.cu
+        src/gpu_pcg_seeded.cu
     )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -176,6 +177,10 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_adaptive_problem_suite_bench benchmarks/gpu_adaptive_problem_suite_bench.cpp)
     target_link_libraries(gfss_gpu_adaptive_problem_suite_bench PRIVATE gfss_mixed_refinement)
     target_include_directories(gfss_gpu_adaptive_problem_suite_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_two_level_seed_bench benchmarks/gpu_two_level_seed_bench.cpp)
+    target_link_libraries(gfss_gpu_two_level_seed_bench PRIVATE gfss_cuda_operator gfss_core)
+    target_include_directories(gfss_gpu_two_level_seed_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
