@@ -31,16 +31,20 @@ struct GpuSmoothedAggregationApplyResult {
     std::size_t model_coordinate_bytes{0};
 };
 
-// Persistent first GPU implementation of
+// Persistent GPU implementation of
 //
 //   y_c = P_m^T A P_m x_c,
 //   P_m = (I - omega D^{-1} A)^m P0.
 //
 // P0/P0^T are reconstructed from aggregation metadata; smoothed interpolation
-// is never materialized. The context keeps all work vectors and metadata on the
-// device across applies. The current structured-Q1 implementation deliberately
-// reuses the existing GoldSparse/Jacobi kernels so stage timings are directly
-// comparable with the M2/M3 operator work.
+// is never materialized. Transfer uses aggregate-owned CSR node lists: one warp
+// owns one aggregate, P0 writes uniquely owned fine nodes, and P0^T performs a
+// warp-local reduction followed by one direct store per coarse DOF. Therefore
+// tentative restriction needs neither global atomics nor a coarse-vector
+// memset. The context keeps all work vectors and metadata resident across
+// applies. The structured-Q1 path deliberately reuses the existing
+// GoldSparse/Jacobi kernels so stage timings remain directly comparable with
+// the M2/M3 operator work.
 class GpuSmoothedAggregationContext {
 public:
     GpuSmoothedAggregationContext(
