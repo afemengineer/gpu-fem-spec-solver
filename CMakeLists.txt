@@ -115,7 +115,10 @@ if(GFSS_HAS_CUDA)
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=1)
     set_target_properties(gfss PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
-    add_library(gfss_cuda_operator STATIC src/gpu_elasticity.cu)
+    add_library(gfss_cuda_operator STATIC
+        src/gpu_elasticity.cu
+        src/gpu_gold_3d.cu
+    )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core)
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     set_target_properties(gfss_cuda_operator PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
