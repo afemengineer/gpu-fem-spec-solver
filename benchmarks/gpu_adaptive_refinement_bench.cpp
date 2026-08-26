@@ -90,7 +90,8 @@ int main(int argc, char** argv) {
                   << std::fixed
                   << "max_outer_iterations=" << max_outer
                   << " max_inner_iterations=" << max_inner << '\n'
-                  << "controller=adaptive_measured_cost_and_contraction\n"
+                  << "controller=in_pcg_economic_stopping\n"
+                  << "inner_tolerance=user_unspecified\n"
                   << "converged=" << (result.converged ? "true" : "false")
                   << " outer_iterations=" << result.outer_iterations
                   << " inner_solves=" << result.inner_solves << '\n'
@@ -110,17 +111,18 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < result.adaptive_steps.size(); ++i) {
             const auto& step = result.adaptive_steps[i];
             std::cout << "adaptive_step[" << i << "]"
-                      << " requested_eta=" << step.requested_inner_tolerance
-                      << " achieved_eta=" << step.achieved_inner_residual
+                      << " selected_eta=" << step.achieved_inner_residual
                       << " best_eta=" << step.best_inner_residual
                       << " outer_q=" << step.outer_contraction
-                      << " gain_est=" << step.estimated_contraction_gain
+                      << " gain_used=" << step.estimated_contraction_gain
                       << std::fixed
+                      << " predicted_outer=" << step.predicted_outer_corrections
                       << " iterations=" << step.inner_iterations
                       << " matvecs=" << step.inner_matvecs
                       << " audits=" << step.inner_audits
-                      << " converged=" << (step.inner_converged ? "true" : "false")
+                      << " economic_stop=" << (step.economic_stop ? "true" : "false")
                       << " stagnated=" << (step.inner_stagnated ? "true" : "false")
+                      << " predicted_total_ms=" << step.predicted_total_ms
                       << " solve_ms=" << step.inner_solve_ms
                       << std::scientific << '\n';
         }
@@ -134,7 +136,7 @@ int main(int argc, char** argv) {
                   << result.gpu_correction_wall_ms << '\n'
                   << "total_ms=" << result.total_ms << '\n'
                   << "outer_residual=cpu_fp64_matrix_free\n"
-                  << "inner_correction=gpu_fp32_goldsparse_jacobi_pcg_persistent\n";
+                  << "inner_correction=gpu_fp32_goldsparse_jacobi_pcg_persistent_economic\n";
 
         if (!result.converged) {
             std::cerr << "WARNING: adaptive mixed refinement did not reach the requested outer tolerance\n";
