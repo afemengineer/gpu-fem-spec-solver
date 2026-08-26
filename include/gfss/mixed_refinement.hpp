@@ -10,6 +10,7 @@ namespace gfss {
 
 struct MixedRefinementResult {
     std::vector<double> x;
+    std::vector<double> outer_relative_residuals;
     std::size_t outer_iterations{0};
     std::size_t inner_solves{0};
     std::size_t total_inner_iterations{0};
@@ -18,6 +19,7 @@ struct MixedRefinementResult {
     double initial_relative_residual{0.0};
     double final_relative_residual{0.0};
     double accurate_residual_ms{0.0};
+    double gpu_context_setup_ms{0.0};
     double gpu_correction_solve_ms{0.0};
     double gpu_correction_wall_ms{0.0};
     double total_ms{0.0};
@@ -26,8 +28,8 @@ struct MixedRefinementResult {
 // Mixed-precision defect correction for the clamped structured-Q1 elasticity
 // problem. The outer iterate and residual are FP64 and use the trusted CPU
 // matrix-free operator. Each correction equation is solved approximately with
-// the FP32 GPU GoldSparse Jacobi-PCG solver and accumulated into the FP64
-// iterate. The accurate outer residual owns the convergence decision.
+// a reusable FP32 GPU GoldSparse Jacobi-PCG context and accumulated into the
+// FP64 iterate. The accurate outer residual owns the convergence decision.
 MixedRefinementResult solve_mixed_refinement_x0(
     const StructuredHexMesh& mesh,
     const Material& material,
