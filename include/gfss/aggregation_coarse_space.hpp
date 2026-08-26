@@ -65,6 +65,10 @@ NodalGraph3D build_structured_hex_nodal_graph_x0(
 // Each aggregate contributes up to six coarse DOFs. The local rigid-body
 // columns are orthonormalized using only a 6x6 Gram matrix, so P need not be
 // stored explicitly.
+//
+// Scope boundary: this constructs the tentative coarse space only. It does not
+// yet build or apply A_c = P^T A P, smooth the tentative interpolation, recurse
+// aggregation to additional levels, or choose strength-of-connection weights.
 ElasticityAggregationCoarseSpace build_elasticity_aggregation_coarse_space(
     NodalGraph3D graph,
     const ElasticityAggregationOptions& options = {});
