@@ -151,6 +151,7 @@ if(GFSS_HAS_CUDA)
         src/gpu_gold_sparse.cu
         src/gpu_pcg_persistent.cu
         src/gpu_pcg_seeded.cu
+        src/gpu_smoothed_aggregation.cu
     )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -193,6 +194,10 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_two_level_consistency_bench benchmarks/gpu_two_level_consistency_bench.cpp)
     target_link_libraries(gfss_gpu_two_level_consistency_bench PRIVATE gfss_cuda_operator gfss_core)
     target_include_directories(gfss_gpu_two_level_consistency_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_smoothed_coarse_action_bench benchmarks/gpu_smoothed_coarse_action_bench.cpp)
+    target_link_libraries(gfss_gpu_smoothed_coarse_action_bench PRIVATE gfss_cuda_operator gfss_multigrid_reference)
+    target_include_directories(gfss_gpu_smoothed_coarse_action_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
