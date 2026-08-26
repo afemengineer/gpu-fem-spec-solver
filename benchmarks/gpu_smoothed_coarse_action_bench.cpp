@@ -139,22 +139,30 @@ std::vector<double> make_probe_double(std::size_t n) {
     return v;
 }
 
-void print_timing(const char* prefix, const gfss::GpuSmoothedAggregationTiming& t,
-                  std::size_t fine_operator_applies, std::size_t fine_dofs) {
-    const double fine_a_per_apply = fine_operator_applies > 0U
-        ? t.fine_operator_ms / static_cast<double>(fine_operator_applies)
+void print_timing(const char* prefix,
+                  const gfss::GpuSmoothedAggregationTiming& t,
+                  std::size_t smoothing_steps,
+                  std::size_t fine_operator_applies,
+                  std::size_t fine_dofs) {
+    const double forward_per_step = smoothing_steps > 0U
+        ? t.jacobi_ms / static_cast<double>(smoothing_steps)
+        : 0.0;
+    const double transpose_per_step = smoothing_steps > 0U
+        ? t.vector_update_ms / static_cast<double>(smoothing_steps)
         : 0.0;
     const double fine_equiv_gdof_s = t.total_ms > 0.0
         ? static_cast<double>(fine_operator_applies) * static_cast<double>(fine_dofs) /
               (t.total_ms * 1.0e6)
         : 0.0;
+
     std::cout << prefix
               << "_total_ms=" << t.total_ms
               << " " << prefix << "_P0_ms=" << t.p0_ms
-              << " " << prefix << "_fine_A_total_ms=" << t.fine_operator_ms
-              << " " << prefix << "_fine_A_per_apply_ms=" << fine_a_per_apply
-              << " " << prefix << "_jacobi_total_ms=" << t.jacobi_ms
-              << " " << prefix << "_update_total_ms=" << t.vector_update_ms
+              << " " << prefix << "_center_A_ms=" << t.fine_operator_ms
+              << " " << prefix << "_forward_fused_total_ms=" << t.jacobi_ms
+              << " " << prefix << "_forward_fused_per_step_ms=" << forward_per_step
+              << " " << prefix << "_transpose_fused_total_ms=" << t.vector_update_ms
+              << " " << prefix << "_transpose_fused_per_step_ms=" << transpose_per_step
               << " " << prefix << "_P0T_ms=" << t.p0t_ms
               << " " << prefix << "_fine_equiv_GDOF_s=" << fine_equiv_gdof_s
               << '\n';
@@ -197,15 +205,18 @@ void run_one(gfss::GpuSmoothedAggregationContext& context,
               << static_cast<double>(gpu.aggregation_metadata_bytes) / fine_free
               << " model_coordinate_bytes_per_fine_free_dof="
               << static_cast<double>(gpu.model_coordinate_bytes) / fine_free << '\n';
-    print_timing("median", gpu.median_timing, gpu.fine_operator_applies, mesh.dof_count());
-    print_timing("best", gpu.best_timing, gpu.fine_operator_applies, mesh.dof_count());
+
+    print_timing("median", gpu.median_timing, m,
+                 gpu.fine_operator_applies, mesh.dof_count());
+    print_timing("best", gpu.best_timing, m,
+                 gpu.fine_operator_applies, mesh.dof_count());
 
     const double total = gpu.median_timing.total_ms;
     if (total > 0.0) {
         std::cout << "median_fraction_P0=" << gpu.median_timing.p0_ms / total
-                  << " median_fraction_fine_A=" << gpu.median_timing.fine_operator_ms / total
-                  << " median_fraction_jacobi=" << gpu.median_timing.jacobi_ms / total
-                  << " median_fraction_update=" << gpu.median_timing.vector_update_ms / total
+                  << " median_fraction_center_A=" << gpu.median_timing.fine_operator_ms / total
+                  << " median_fraction_forward_fused=" << gpu.median_timing.jacobi_ms / total
+                  << " median_fraction_transpose_fused=" << gpu.median_timing.vector_update_ms / total
                   << " median_fraction_P0T=" << gpu.median_timing.p0t_ms / total
                   << '\n';
     }
@@ -245,8 +256,11 @@ int main(int argc, char** argv) {
                   << "transfer_layout=aggregate_CSR_one_warp_per_aggregate\n"
                   << "restriction_global_atomics=false\n"
                   << "restriction_coarse_memset=false\n"
-                  << "fine_operator=existing_GoldSparse_FP32\n"
-                  << "jacobi=existing_GPU_PCG_diagonal\n"
+                  << "smoothing_kernels=fused_forward_and_exact_transpose\n"
+                  << "forward_kernel=I_minus_omega_DinvA\n"
+                  << "transpose_kernel=I_minus_omega_A_Dinv\n"
+                  << "fine_workspace_vectors=2\n"
+                  << "fine_operator=existing_GoldSparse_FP32_center_action\n"
                   << "timing_excludes_context_setup_H2D_D2H_and_CPU_oracle\n"
                   << "fine_dofs=" << mesh.dof_count()
                   << " fine_free_dofs=" << space.fine_free_dofs
