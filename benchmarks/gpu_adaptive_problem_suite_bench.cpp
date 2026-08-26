@@ -1,5 +1,7 @@
 #include "gfss/mixed_refinement.hpp"
+#include "gfss/solver_record.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -142,46 +144,22 @@ std::vector<double> make_rhs(const CaseDef& test) {
 std::vector<CaseDef> make_cases() {
     constexpr double E = 210.0e9;
     return {
-        {"baseline_cube",
-         "isotropic cube, standard material, uniform transverse face load",
-         {64U, 64U, 64U, 1.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::UniformZ},
-        {"slender_beam",
-         "4:1:1 cantilever with near-isotropic cells",
-         {128U, 32U, 32U, 4.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::UniformZ},
-        {"thin_plate",
-         "thin 1:1:0.125 domain with near-isotropic cells",
-         {64U, 64U, 8U, 1.0, 1.0, 0.125},
-         {E, 0.30},
-         LoadKind::UniformZ},
-        {"anisotropic_cells",
-         "unit cube with 4:1 element-size anisotropy",
-         {96U, 24U, 24U, 1.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::UniformZ},
-        {"near_incompressible",
-         "cube with Poisson ratio 0.49",
-         {48U, 48U, 48U, 1.0, 1.0, 1.0},
-         {E, 0.49},
-         LoadKind::UniformZ},
-        {"localized_patch",
-         "cube with concentrated central face patch load",
-         {64U, 64U, 64U, 1.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::PatchZ},
-        {"torsion_face",
-         "cube with zero-net-force torsional face traction",
-         {64U, 64U, 64U, 1.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::Torsion},
-        {"checkerboard_face",
-         "cube with high-spatial-frequency alternating face load",
-         {48U, 48U, 48U, 1.0, 1.0, 1.0},
-         {E, 0.30},
-         LoadKind::CheckerboardZ},
+        {"baseline_cube", "isotropic cube, standard material, uniform transverse face load",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"slender_beam", "4:1:1 cantilever with near-isotropic cells",
+         {128U, 32U, 32U, 4.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"thin_plate", "thin 1:1:0.125 domain with near-isotropic cells",
+         {64U, 64U, 8U, 1.0, 1.0, 0.125}, {E, 0.30}, LoadKind::UniformZ},
+        {"anisotropic_cells", "unit cube with 4:1 element-size anisotropy",
+         {96U, 24U, 24U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"near_incompressible", "cube with Poisson ratio 0.49",
+         {48U, 48U, 48U, 1.0, 1.0, 1.0}, {E, 0.49}, LoadKind::UniformZ},
+        {"localized_patch", "cube with concentrated central face patch load",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::PatchZ},
+        {"torsion_face", "cube with zero-net-force torsional face traction",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::Torsion},
+        {"checkerboard_face", "cube with high-spatial-frequency alternating face load",
+         {48U, 48U, 48U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::CheckerboardZ},
     };
 }
 
@@ -207,10 +185,8 @@ void print_result(const CaseDef& test,
               << " total_inner_iterations=" << result.total_inner_iterations
               << " total_inner_matvecs=" << result.total_inner_matvecs << '\n'
               << std::scientific
-              << "initial_true_relative_residual="
-              << result.initial_relative_residual
-              << " final_true_relative_residual="
-              << result.final_relative_residual << '\n';
+              << "initial_true_relative_residual=" << result.initial_relative_residual
+              << " final_true_relative_residual=" << result.final_relative_residual << '\n';
 
     for (std::size_t i = 0; i < result.adaptive_steps.size(); ++i) {
         const auto& step = result.adaptive_steps[i];
@@ -228,8 +204,7 @@ void print_result(const CaseDef& test,
                   << std::scientific << '\n';
     }
 
-    const double warm_ms =
-        result.accurate_residual_ms + result.gpu_correction_wall_ms;
+    const double warm_ms = result.accurate_residual_ms + result.gpu_correction_wall_ms;
     std::cout << std::fixed
               << "accurate_residual_ms=" << result.accurate_residual_ms
               << " gpu_correction_wall_ms=" << result.gpu_correction_wall_ms
@@ -238,20 +213,70 @@ void print_result(const CaseDef& test,
               << " total_ms=" << result.total_ms << '\n';
 }
 
+void emit_record(const CaseDef& test,
+                 const gfss::MixedRefinementResult& result,
+                 double outer_tolerance) {
+    gfss::SolverRecord record;
+    record.benchmark = "gfss_gpu_adaptive_problem_suite_bench";
+    record.solver_family = "mixed_refinement";
+    record.solver_variant = "in_pcg_economic_stopping";
+    record.problem_name = test.name;
+    record.fine_dofs = test.mesh.dof_count();
+    record.discretization = "structured_Q1_HEX8_x0_clamped";
+    record.material = "homogeneous_isotropic_linear_elasticity";
+    record.converged = result.converged;
+    record.target_relative_residual = outer_tolerance;
+    record.initial_true_relative_residual = result.initial_relative_residual;
+    record.true_relative_residual = result.final_relative_residual;
+
+    // total_ms starts before persistent GPU-context construction. Separate the
+    // one-time context setup so the plotting tool can amortize it over reused
+    // right-hand sides without changing the raw measurement.
+    record.setup_ms = result.gpu_context_setup_ms;
+    record.total_ms = result.total_ms;
+    record.solve_ms = std::max(0.0, result.total_ms - result.gpu_context_setup_ms);
+    record.truth_ms = result.accurate_residual_ms;
+
+    // Current M4/M5 GPU-PCG context owns six persistent FP32 fine vectors:
+    // b, x, r, z, p, q. This is the accelerator solver-state capacity metric,
+    // not total host process memory. Immutable problem representation and FP64
+    // host truth vectors are outside this VRAM-capacity scope.
+    constexpr double kGpuSolverBytesPerDof = 6.0 * sizeof(float);
+    record.memory_kind = "modeled";
+    record.peak_bytes_per_dof = kGpuSolverBytesPerDof;
+    record.peak_solver_bytes =
+        kGpuSolverBytesPerDof * static_cast<double>(test.mesh.dof_count());
+
+    record.fine_operator_applies =
+        result.total_inner_matvecs + result.outer_relative_residuals.size();
+    record.true_residual_audits = result.outer_relative_residuals.size();
+    record.fine_matvec_equivalents =
+        static_cast<double>(record.fine_operator_applies);
+    record.precision_policy = "FP64_outer_truth_FP32_inner_GPU";
+
+    record.extra_numbers["outer_iterations"] = static_cast<double>(result.outer_iterations);
+    record.extra_numbers["inner_solves"] = static_cast<double>(result.inner_solves);
+    record.extra_numbers["total_inner_iterations"] =
+        static_cast<double>(result.total_inner_iterations);
+    record.extra_numbers["gpu_correction_wall_ms"] = result.gpu_correction_wall_ms;
+    record.extra_strings["load"] = load_name(test.load);
+    record.extra_strings["memory_scope"] = "accelerator_persistent_solver_state";
+    record.extra_strings["correctness_owner"] = "FP64_true_residual";
+
+    gfss::emit_solver_record(std::cout, record);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
         const std::string selector = argc > 1 ? argv[1] : "all";
         const double outer_tolerance = argc > 2
-            ? parse_outer_tolerance(argv[2])
-            : 1.0e-6;
+            ? parse_outer_tolerance(argv[2]) : 1.0e-6;
         const std::size_t max_outer = argc > 3
-            ? parse_size(argv[3], "max outer iterations")
-            : 12U;
+            ? parse_size(argv[3], "max outer iterations") : 12U;
         const std::size_t max_inner = argc > 4
-            ? parse_size(argv[4], "max inner iterations")
-            : 5000U;
+            ? parse_size(argv[4], "max inner iterations") : 5000U;
 
         const auto cases = make_cases();
         std::size_t selected = 0U;
@@ -264,24 +289,17 @@ int main(int argc, char** argv) {
                   << "selector=" << selector << '\n';
 
         for (const auto& test : cases) {
-            if (selector != "all" && selector != test.name) {
-                continue;
-            }
+            if (selector != "all" && selector != test.name) continue;
             ++selected;
             std::cout << "\n========================================\n";
             try {
                 const auto rhs = make_rhs(test);
                 const auto result = gfss::solve_mixed_refinement_adaptive_x0(
-                    test.mesh,
-                    test.material,
-                    rhs,
-                    outer_tolerance,
-                    max_outer,
-                    max_inner,
-                    4);
+                    test.mesh, test.material, rhs, outer_tolerance,
+                    max_outer, max_inner, 4);
                 print_result(test, result, outer_tolerance);
-                if (result.converged &&
-                    result.final_relative_residual <= outer_tolerance) {
+                emit_record(test, result, outer_tolerance);
+                if (result.converged && result.final_relative_residual <= outer_tolerance) {
                     ++converged;
                 } else {
                     ++failed;
@@ -296,9 +314,7 @@ int main(int argc, char** argv) {
         if (selected == 0U) {
             std::cerr << "error: unknown suite case '" << selector << "'\n"
                       << "available cases:";
-            for (const auto& test : cases) {
-                std::cerr << ' ' << test.name;
-            }
+            for (const auto& test : cases) std::cerr << ' ' << test.name;
             std::cerr << " all\n";
             return 1;
         }
