@@ -43,6 +43,19 @@ double relative_l2(const std::vector<double>& reference,
     return std::sqrt(num / std::max(den, 1.0e-300));
 }
 
+double relative_l2_float(const std::vector<float>& reference,
+                         const std::vector<float>& candidate) {
+    double num = 0.0;
+    double den = 0.0;
+    for (std::size_t i = 0; i < reference.size(); ++i) {
+        const double r = static_cast<double>(reference[i]);
+        const double d = r - static_cast<double>(candidate[i]);
+        num += d * d;
+        den += r * r;
+    }
+    return std::sqrt(num / std::max(den, 1.0e-300));
+}
+
 double true_relative_residual(const gfss::StructuredHexMesh& mesh,
                               const gfss::Material& material,
                               const std::vector<float>& rhs,
@@ -81,6 +94,19 @@ int main() {
         return 1;
     }
 
+    gfss::GpuPcgResult persistent;
+    try {
+        gfss::GpuPcgContext context(mesh, material, 4);
+        persistent = context.solve(rhs, gpu_tolerance, 1500U);
+        require(context.explicit_device_bytes() ==
+                    6U * rhs.size() * sizeof(float),
+                "persistent GPU PCG context memory accounting mismatch");
+    } catch (const std::exception& e) {
+        std::cerr << "FAILED: persistent GPU PCG context threw during smoke test: "
+                  << e.what() << '\n';
+        return 1;
+    }
+
     std::vector<double> rhs_double(rhs.begin(), rhs.end());
     const auto cpu = gfss::conjugate_gradient(
         [&](const std::vector<double>& x) {
@@ -92,43 +118,77 @@ int main() {
 
     require(cpu.converged, "trusted CPU CG must converge");
     require(gpu.converged, "GPU Jacobi-PCG must converge in smoke-test regime");
+    require(persistent.converged,
+            "persistent GPU Jacobi-PCG must converge in smoke-test regime");
     require(gpu.iterations > 0U, "GPU PCG must perform iterations");
+    require(persistent.iterations > 0U,
+            "persistent GPU PCG must perform iterations");
     require(gpu.residual_audits > 0U,
             "GPU PCG must verify convergence with at least one residual audit");
+    require(persistent.residual_audits > 0U,
+            "persistent GPU PCG must verify convergence with a residual audit");
     require(gpu.matvecs == gpu.iterations + gpu.residual_audits,
             "GPU PCG matvec accounting must include residual audits");
+    require(persistent.matvecs ==
+                persistent.iterations + persistent.residual_audits,
+            "persistent GPU PCG matvec accounting must include residual audits");
     require(gpu.solve_ms > 0.0, "GPU PCG solve timing must be positive");
+    require(persistent.solve_ms > 0.0,
+            "persistent GPU PCG solve timing must be positive");
     require(gpu.explicit_device_bytes == 6U * rhs.size() * sizeof(float),
             "GPU PCG explicit vector memory accounting mismatch");
 
     const double true_rel = true_relative_residual(mesh, material, rhs, gpu.x);
+    const double persistent_true_rel =
+        true_relative_residual(mesh, material, rhs, persistent.x);
     const double solution_rel = relative_l2(cpu.x, gpu.x);
+    const double persistent_solution_rel = relative_l2(cpu.x, persistent.x);
+    const double persistent_vs_standalone =
+        relative_l2_float(gpu.x, persistent.x);
 
     require(gpu.reported_relative_residual <= gpu_tolerance,
             "GPU PCG recursive residual must meet smoke-test tolerance");
     require(gpu.audited_relative_residual <= gpu_tolerance,
             "GPU PCG audited residual must meet smoke-test tolerance");
+    require(persistent.reported_relative_residual <= gpu_tolerance,
+            "persistent GPU PCG recursive residual must meet tolerance");
+    require(persistent.audited_relative_residual <= gpu_tolerance,
+            "persistent GPU PCG audited residual must meet tolerance");
     require(true_rel < 2.0e-4,
             "GPU PCG true residual must remain close to audited FP32 residual");
+    require(persistent_true_rel < 2.0e-4,
+            "persistent GPU PCG true residual must remain close to audit");
     require(solution_rel < 1.0e-3,
             "GPU PCG solution must match trusted CPU CG solution");
+    require(persistent_solution_rel < 1.0e-3,
+            "persistent GPU PCG solution must match trusted CPU CG solution");
+    require(persistent_vs_standalone < 1.0e-5,
+            "persistent and standalone GPU PCG solutions must agree");
 
     for (std::uint32_t k = 0; k <= mesh.nz; ++k) {
         for (std::uint32_t j = 0; j <= mesh.ny; ++j) {
             const auto node = mesh.node_index(0U, j, k);
             for (int c = 0; c < 3; ++c) {
-                require(gpu.x[static_cast<std::size_t>(3ULL * node + c)] == 0.0f,
+                const auto dof = static_cast<std::size_t>(3ULL * node + c);
+                require(gpu.x[dof] == 0.0f,
                         "GPU PCG constrained x=0 DOFs must remain exactly zero");
+                require(persistent.x[dof] == 0.0f,
+                        "persistent GPU PCG constrained DOFs must remain zero");
             }
         }
     }
 
     std::cout << "GPU PCG checks passed; iterations=" << gpu.iterations
+              << " persistent_iterations=" << persistent.iterations
               << " audits=" << gpu.residual_audits
+              << " persistent_audits=" << persistent.residual_audits
               << " recursive_rel=" << gpu.reported_relative_residual
               << " audited_rel=" << gpu.audited_relative_residual
               << " true_rel=" << true_rel
+              << " persistent_true_rel=" << persistent_true_rel
+              << " persistent_vs_standalone=" << persistent_vs_standalone
               << " solution_rel_l2=" << solution_rel
-              << " solve_ms=" << gpu.solve_ms << '\n';
+              << " solve_ms=" << gpu.solve_ms
+              << " persistent_solve_ms=" << persistent.solve_ms << '\n';
     return 0;
 }

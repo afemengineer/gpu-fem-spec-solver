@@ -141,11 +141,17 @@ if(GFSS_HAS_CUDA)
         src/gpu_elasticity.cu
         src/gpu_gold_3d.cu
         src/gpu_gold_sparse.cu
-        src/gpu_pcg_audit.cu
+        src/gpu_pcg_persistent.cu
     )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     set_target_properties(gfss_cuda_operator PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+
+    add_library(gfss_mixed_refinement STATIC
+        src/mixed_refinement.cpp
+    )
+    target_link_libraries(gfss_mixed_refinement PUBLIC gfss_cuda_operator gfss_core)
+    target_include_directories(gfss_mixed_refinement PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
     add_executable(gfss_cuda_operator_bench benchmarks/cuda_operator_bench.cpp)
     target_link_libraries(gfss_cuda_operator_bench PRIVATE gfss_cuda_operator gfss_core)
@@ -158,6 +164,18 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_pcg_bench benchmarks/gpu_pcg_bench.cpp)
     target_link_libraries(gfss_gpu_pcg_bench PRIVATE gfss_cuda_operator gfss_core)
     target_include_directories(gfss_gpu_pcg_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_mixed_refinement_bench benchmarks/gpu_mixed_refinement_bench.cpp)
+    target_link_libraries(gfss_gpu_mixed_refinement_bench PRIVATE gfss_mixed_refinement)
+    target_include_directories(gfss_gpu_mixed_refinement_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_adaptive_refinement_bench benchmarks/gpu_adaptive_refinement_bench.cpp)
+    target_link_libraries(gfss_gpu_adaptive_refinement_bench PRIVATE gfss_mixed_refinement)
+    target_include_directories(gfss_gpu_adaptive_refinement_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_adaptive_problem_suite_bench benchmarks/gpu_adaptive_problem_suite_bench.cpp)
+    target_link_libraries(gfss_gpu_adaptive_problem_suite_bench PRIVATE gfss_mixed_refinement)
+    target_include_directories(gfss_gpu_adaptive_problem_suite_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
@@ -213,5 +231,9 @@ if(GFSS_BUILD_TESTS)
         add_executable(gfss_gpu_pcg_test tests/gpu_pcg_test.cpp)
         target_link_libraries(gfss_gpu_pcg_test PRIVATE gfss_cuda_operator gfss_core)
         add_test(NAME gpu_pcg COMMAND gfss_gpu_pcg_test)
+
+        add_executable(gfss_adaptive_refinement_test tests/adaptive_refinement_test.cpp)
+        target_link_libraries(gfss_adaptive_refinement_test PRIVATE gfss_mixed_refinement)
+        add_test(NAME adaptive_refinement COMMAND gfss_adaptive_refinement_test)
     endif()
 endif()
