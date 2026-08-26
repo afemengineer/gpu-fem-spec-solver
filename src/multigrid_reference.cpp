@@ -309,7 +309,10 @@ void chebyshev_jacobi_smooth(const LevelData& level,
     for (std::size_t k = 0; k < degree; ++k) {
         const double angle = kPi * (2.0 * static_cast<double>(k) + 1.0) /
                              (2.0 * static_cast<double>(degree));
-        const double root = theta - delta * std::cos(angle);
+        // Traverse roots from the high end of the target spectrum toward the
+        // low end. The polynomial is unchanged, but this avoids applying the
+        // largest Richardson coefficient to an unsmoothed state first.
+        const double root = theta + delta * std::cos(angle);
         if (!(root > 0.0)) {
             throw std::runtime_error("multigrid Chebyshev root is not positive");
         }
