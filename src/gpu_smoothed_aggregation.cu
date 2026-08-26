@@ -1,6 +1,6 @@
-// Reuse the exact persistent-PCG GoldSparse and Jacobi primitives in this TU.
-// The public PCG entry point is renamed so this source contributes only the
-// smoothed-aggregation API while retaining access to the internal launchers.
+// Reuse the exact persistent-PCG GoldSparse/Jacobi stencil data and launchers.
+// The public PCG entry point is renamed so this TU contributes only the
+// smoothed-aggregation API.
 #define solve_pcg_cuda_gold_sparse_x0 solve_pcg_cuda_gold_sparse_x0_sa_internal_unused
 #include "gpu_pcg.cu"
 #undef solve_pcg_cuda_gold_sparse_x0
@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -33,9 +34,9 @@ static_assert(sizeof(DeviceAggregateSa) == 168,
 
 enum class TimedStage {
     P0,
+    ForwardSmooth,
     FineA,
-    Jacobi,
-    Update,
+    TransposeSmooth,
     P0T,
 };
 
@@ -54,10 +55,6 @@ __device__ __forceinline__ void aggregate_basis_values(
     bz = t[2] + y * t[3] - x * t[4];
 }
 
-// One warp owns one aggregate. The aggregate metadata and coarse coefficients
-// are shared by all of its nodes, and every fine node has exactly one owner.
-// This turns tentative prolongation from node->aggregate random lookup into a
-// compact aggregate->nodes traversal with direct, non-atomic fine writes.
 __global__ void tentative_prolongation_aggregate_sa_kernel(
     std::size_t nodes,
     const std::uint32_t* __restrict__ aggregate_offsets,
@@ -102,10 +99,6 @@ __global__ void tentative_prolongation_aggregate_sa_kernel(
     }
 }
 
-// Exact transpose of the aggregate-owned P0 kernel. Every block owns every
-// coarse DOF of one aggregate, so node contributions can be reduced inside a
-// warp and written once. No global atomicAdd and no coarse-vector memset are
-// required.
 __global__ void tentative_restriction_aggregate_sa_kernel(
     std::size_t nodes,
     const std::uint32_t* __restrict__ aggregate_offsets,
@@ -155,16 +148,324 @@ __global__ void tentative_restriction_aggregate_sa_kernel(
     }
 }
 
-__global__ void axpy_negative_sa_kernel(
-    std::size_t n,
-    float omega,
-    const float* __restrict__ correction,
-    float* __restrict__ state) {
-    const std::size_t i =
-        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (i < n) {
-        state[i] = fmaf(-omega, correction[i], state[i]);
+__device__ __forceinline__ void apply_gold_sparse_sa(
+    std::uint32_t i,
+    std::uint32_t j,
+    std::uint32_t k,
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    const float* __restrict__ ux,
+    const float* __restrict__ uy,
+    const float* __restrict__ uz,
+    float& out_x,
+    float& out_y,
+    float& out_z) {
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::uint32_t node = i + sx * (j + sy * k);
+    out_x = 0.0f;
+    out_y = 0.0f;
+    out_z = 0.0f;
+
+    if (i != 0U && i != nx && j != 0U && j != ny && k != 0U && k != nz) {
+#pragma unroll
+        for (int e = 0; e < 7; ++e) {
+            const DeviceDiagEntryPcg entry = kPcgDiag[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            out_x = fmaf(entry.b00, ux[neighbor], out_x);
+            out_y = fmaf(entry.b11, uy[neighbor], out_y);
+            out_z = fmaf(entry.b22, uz[neighbor], out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeXYEntryPcg entry = kPcgEdgeXY[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_x = fmaf(entry.b01, x1, out_x);
+            out_y = fmaf(entry.b10, x0, out_y);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeXZEntryPcg entry = kPcgEdgeXZ[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_x = fmaf(entry.b02, x2, out_x);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_z = fmaf(entry.b20, x0, out_z);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeYZEntryPcg entry = kPcgEdgeYZ[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_y = fmaf(entry.b12, x2, out_y);
+            out_z = fmaf(entry.b21, x1, out_z);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 8; ++e) {
+            const DeviceCornerEntryPcg entry = kPcgCorner[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            const float* b = entry.block;
+            out_x = fmaf(b[0], x0, out_x);
+            out_x = fmaf(b[1], x1, out_x);
+            out_x = fmaf(b[2], x2, out_x);
+            out_y = fmaf(b[3], x0, out_y);
+            out_y = fmaf(b[4], x1, out_y);
+            out_y = fmaf(b[5], x2, out_y);
+            out_z = fmaf(b[6], x0, out_z);
+            out_z = fmaf(b[7], x1, out_z);
+            out_z = fmaf(b[8], x2, out_z);
+        }
+    } else {
+        const int cls = axis_class_pcg(i, nx) +
+                        3 * (axis_class_pcg(j, ny) + 3 * axis_class_pcg(k, nz));
+        const int count = static_cast<int>(kPcgBoundaryCounts[cls]);
+#pragma unroll 1
+        for (int e = 0; e < count; ++e) {
+            const DeviceNodeStencilEntryPcg& entry = kPcgBoundaryEntries[cls * 27 + e];
+            const int neighbor = static_cast<int>(node) + static_cast<int>(entry.dx) +
+                                 static_cast<int>(sx) *
+                                     (static_cast<int>(entry.dy) +
+                                      static_cast<int>(sy) * static_cast<int>(entry.dz));
+            const float x0 = ux[neighbor];
+            const float x1 = uy[neighbor];
+            const float x2 = uz[neighbor];
+            const float* b = entry.block;
+            out_x = fmaf(b[0], x0, out_x);
+            out_x = fmaf(b[1], x1, out_x);
+            out_x = fmaf(b[2], x2, out_x);
+            out_y = fmaf(b[3], x0, out_y);
+            out_y = fmaf(b[4], x1, out_y);
+            out_y = fmaf(b[5], x2, out_y);
+            out_z = fmaf(b[6], x0, out_z);
+            out_z = fmaf(b[7], x1, out_z);
+            out_z = fmaf(b[8], x2, out_z);
+        }
     }
+}
+
+__device__ __forceinline__ void apply_gold_sparse_scaled_input_sa(
+    std::uint32_t i,
+    std::uint32_t j,
+    std::uint32_t k,
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    const float* __restrict__ ux,
+    const float* __restrict__ uy,
+    const float* __restrict__ uz,
+    float& out_x,
+    float& out_y,
+    float& out_z) {
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::uint32_t node = i + sx * (j + sy * k);
+    out_x = 0.0f;
+    out_y = 0.0f;
+    out_z = 0.0f;
+
+    const bool deep_interior =
+        i > 1U && i + 1U < nx &&
+        j > 1U && j + 1U < ny &&
+        k > 1U && k + 1U < nz;
+
+    if (deep_interior) {
+        constexpr int interior_cls = 13;
+        const float sx0 = kPcgInvDiag[interior_cls][0];
+        const float sx1 = kPcgInvDiag[interior_cls][1];
+        const float sx2 = kPcgInvDiag[interior_cls][2];
+#pragma unroll
+        for (int e = 0; e < 7; ++e) {
+            const DeviceDiagEntryPcg entry = kPcgDiag[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            out_x = fmaf(entry.b00, sx0 * ux[neighbor], out_x);
+            out_y = fmaf(entry.b11, sx1 * uy[neighbor], out_y);
+            out_z = fmaf(entry.b22, sx2 * uz[neighbor], out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeXYEntryPcg entry = kPcgEdgeXY[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = sx0 * ux[neighbor];
+            const float x1 = sx1 * uy[neighbor];
+            const float x2 = sx2 * uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_x = fmaf(entry.b01, x1, out_x);
+            out_y = fmaf(entry.b10, x0, out_y);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeXZEntryPcg entry = kPcgEdgeXZ[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = sx0 * ux[neighbor];
+            const float x1 = sx1 * uy[neighbor];
+            const float x2 = sx2 * uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_x = fmaf(entry.b02, x2, out_x);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_z = fmaf(entry.b20, x0, out_z);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 4; ++e) {
+            const DeviceEdgeYZEntryPcg entry = kPcgEdgeYZ[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = sx0 * ux[neighbor];
+            const float x1 = sx1 * uy[neighbor];
+            const float x2 = sx2 * uz[neighbor];
+            out_x = fmaf(entry.b00, x0, out_x);
+            out_y = fmaf(entry.b11, x1, out_y);
+            out_y = fmaf(entry.b12, x2, out_y);
+            out_z = fmaf(entry.b21, x1, out_z);
+            out_z = fmaf(entry.b22, x2, out_z);
+        }
+#pragma unroll
+        for (int e = 0; e < 8; ++e) {
+            const DeviceCornerEntryPcg entry = kPcgCorner[e];
+            const int neighbor = static_cast<int>(node) + entry.offset;
+            const float x0 = sx0 * ux[neighbor];
+            const float x1 = sx1 * uy[neighbor];
+            const float x2 = sx2 * uz[neighbor];
+            const float* b = entry.block;
+            out_x = fmaf(b[0], x0, out_x);
+            out_x = fmaf(b[1], x1, out_x);
+            out_x = fmaf(b[2], x2, out_x);
+            out_y = fmaf(b[3], x0, out_y);
+            out_y = fmaf(b[4], x1, out_y);
+            out_y = fmaf(b[5], x2, out_y);
+            out_z = fmaf(b[6], x0, out_z);
+            out_z = fmaf(b[7], x1, out_z);
+            out_z = fmaf(b[8], x2, out_z);
+        }
+        return;
+    }
+
+    const int cls = axis_class_pcg(i, nx) +
+                    3 * (axis_class_pcg(j, ny) + 3 * axis_class_pcg(k, nz));
+    const int count = static_cast<int>(kPcgBoundaryCounts[cls]);
+#pragma unroll 1
+    for (int e = 0; e < count; ++e) {
+        const DeviceNodeStencilEntryPcg& entry = kPcgBoundaryEntries[cls * 27 + e];
+        const int ni = static_cast<int>(i) + static_cast<int>(entry.dx);
+        const int nj = static_cast<int>(j) + static_cast<int>(entry.dy);
+        const int nk = static_cast<int>(k) + static_cast<int>(entry.dz);
+        const int neighbor = ni + static_cast<int>(sx) *
+                                  (nj + static_cast<int>(sy) * nk);
+
+        float x0 = 0.0f;
+        float x1 = 0.0f;
+        float x2 = 0.0f;
+        if (ni != 0) {
+            const int ncls = axis_class_pcg(static_cast<std::uint32_t>(ni), nx) +
+                             3 * (axis_class_pcg(static_cast<std::uint32_t>(nj), ny) +
+                                  3 * axis_class_pcg(static_cast<std::uint32_t>(nk), nz));
+            x0 = kPcgInvDiag[ncls][0] * ux[neighbor];
+            x1 = kPcgInvDiag[ncls][1] * uy[neighbor];
+            x2 = kPcgInvDiag[ncls][2] * uz[neighbor];
+        }
+        const float* b = entry.block;
+        out_x = fmaf(b[0], x0, out_x);
+        out_x = fmaf(b[1], x1, out_x);
+        out_x = fmaf(b[2], x2, out_x);
+        out_y = fmaf(b[3], x0, out_y);
+        out_y = fmaf(b[4], x1, out_y);
+        out_y = fmaf(b[5], x2, out_y);
+        out_z = fmaf(b[6], x0, out_z);
+        out_z = fmaf(b[7], x1, out_z);
+        out_z = fmaf(b[8], x2, out_z);
+    }
+}
+
+__global__ void forward_smoothed_step_sa_kernel(
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    std::size_t nodes,
+    float omega,
+    const float* __restrict__ input,
+    float* __restrict__ output) {
+    const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const std::uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t k = blockIdx.z;
+    if (i > nx || j > ny || k > nz) return;
+
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::size_t node = static_cast<std::size_t>(i + sx * (j + sy * k));
+    if (i == 0U) {
+        output[node] = 0.0f;
+        output[nodes + node] = 0.0f;
+        output[2U * nodes + node] = 0.0f;
+        return;
+    }
+
+    float ax = 0.0f;
+    float ay = 0.0f;
+    float az = 0.0f;
+    apply_gold_sparse_sa(i, j, k, nx, ny, nz,
+                         input, input + nodes, input + 2U * nodes,
+                         ax, ay, az);
+    const int cls = axis_class_pcg(i, nx) +
+                    3 * (axis_class_pcg(j, ny) + 3 * axis_class_pcg(k, nz));
+    output[node] = fmaf(-omega * kPcgInvDiag[cls][0], ax, input[node]);
+    output[nodes + node] = fmaf(-omega * kPcgInvDiag[cls][1], ay,
+                                input[nodes + node]);
+    output[2U * nodes + node] = fmaf(-omega * kPcgInvDiag[cls][2], az,
+                                     input[2U * nodes + node]);
+}
+
+__global__ void transpose_smoothed_step_sa_kernel(
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    std::size_t nodes,
+    float omega,
+    const float* __restrict__ input,
+    float* __restrict__ output) {
+    const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const std::uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t k = blockIdx.z;
+    if (i > nx || j > ny || k > nz) return;
+
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::size_t node = static_cast<std::size_t>(i + sx * (j + sy * k));
+    if (i == 0U) {
+        output[node] = 0.0f;
+        output[nodes + node] = 0.0f;
+        output[2U * nodes + node] = 0.0f;
+        return;
+    }
+
+    float ax = 0.0f;
+    float ay = 0.0f;
+    float az = 0.0f;
+    apply_gold_sparse_scaled_input_sa(i, j, k, nx, ny, nz,
+                                      input, input + nodes, input + 2U * nodes,
+                                      ax, ay, az);
+    output[node] = fmaf(-omega, ax, input[node]);
+    output[nodes + node] = fmaf(-omega, ay, input[nodes + node]);
+    output[2U * nodes + node] = fmaf(-omega, az, input[2U * nodes + node]);
 }
 
 void launch_p0(const StructuredHexMesh& mesh,
@@ -182,8 +483,6 @@ void launch_p0(const StructuredHexMesh& mesh,
         coordinates, coarse, fine);
     check_cuda_pcg(cudaGetLastError(), "smoothed aggregation aggregate P0 launch");
 
-    // Aggregates contain only free nodes. Preserve exact x=0 Dirichlet values
-    // without a full fine-vector memset.
     const std::uint32_t face_nodes = (mesh.ny + 1U) * (mesh.nz + 1U);
     constexpr unsigned int clamp_threads = 256U;
     const unsigned int clamp_blocks = (face_nodes + clamp_threads - 1U) / clamp_threads;
@@ -207,14 +506,34 @@ void launch_p0t(std::size_t nodes,
     check_cuda_pcg(cudaGetLastError(), "smoothed aggregation aggregate P0T launch");
 }
 
-void launch_negative_axpy(std::size_t n,
-                          float omega,
-                          const float* correction,
-                          float* state) {
-    constexpr unsigned int threads = 256U;
-    const auto blocks = static_cast<unsigned int>((n + threads - 1U) / threads);
-    axpy_negative_sa_kernel<<<blocks, threads>>>(n, omega, correction, state);
-    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation update launch");
+void launch_forward_smooth(const StructuredHexMesh& mesh,
+                           int block_y,
+                           std::size_t nodes,
+                           float omega,
+                           const float* input,
+                           float* output) {
+    const dim3 block(32U, static_cast<unsigned int>(block_y), 1U);
+    const dim3 grid((mesh.nx + 1U + block.x - 1U) / block.x,
+                    (mesh.ny + 1U + block.y - 1U) / block.y,
+                    mesh.nz + 1U);
+    forward_smoothed_step_sa_kernel<<<grid, block>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, omega, input, output);
+    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation fused forward launch");
+}
+
+void launch_transpose_smooth(const StructuredHexMesh& mesh,
+                             int block_y,
+                             std::size_t nodes,
+                             float omega,
+                             const float* input,
+                             float* output) {
+    const dim3 block(32U, static_cast<unsigned int>(block_y), 1U);
+    const dim3 grid((mesh.nx + 1U + block.x - 1U) / block.x,
+                    (mesh.ny + 1U + block.y - 1U) / block.y,
+                    mesh.nz + 1U);
+    transpose_smoothed_step_sa_kernel<<<grid, block>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, omega, input, output);
+    check_cuda_pcg(cudaGetLastError(), "smoothed aggregation fused transpose launch");
 }
 
 GpuSmoothedAggregationTiming summarize_fieldwise_min(
@@ -246,25 +565,25 @@ double median_scalar(std::vector<double> values) {
 
 GpuSmoothedAggregationTiming summarize_fieldwise_median(
     const std::vector<GpuSmoothedAggregationTiming>& samples) {
-    std::vector<double> p0, a, jacobi, update, p0t, total;
+    std::vector<double> p0, center_a, forward, transpose, p0t, total;
     p0.reserve(samples.size());
-    a.reserve(samples.size());
-    jacobi.reserve(samples.size());
-    update.reserve(samples.size());
+    center_a.reserve(samples.size());
+    forward.reserve(samples.size());
+    transpose.reserve(samples.size());
     p0t.reserve(samples.size());
     total.reserve(samples.size());
     for (const auto& s : samples) {
         p0.push_back(s.p0_ms);
-        a.push_back(s.fine_operator_ms);
-        jacobi.push_back(s.jacobi_ms);
-        update.push_back(s.vector_update_ms);
+        center_a.push_back(s.fine_operator_ms);
+        forward.push_back(s.jacobi_ms);
+        transpose.push_back(s.vector_update_ms);
         p0t.push_back(s.p0t_ms);
         total.push_back(s.total_ms);
     }
     return {median_scalar(std::move(p0)),
-            median_scalar(std::move(a)),
-            median_scalar(std::move(jacobi)),
-            median_scalar(std::move(update)),
+            median_scalar(std::move(center_a)),
+            median_scalar(std::move(forward)),
+            median_scalar(std::move(transpose)),
             median_scalar(std::move(p0t)),
             median_scalar(std::move(total))};
 }
@@ -296,7 +615,6 @@ struct GpuSmoothedAggregationContext::Impl {
     float* d_coarse_y{nullptr};
     float* d_f0{nullptr};
     float* d_f1{nullptr};
-    float* d_f2{nullptr};
 
     std::size_t aggregation_metadata_bytes{0};
     std::size_t model_coordinate_bytes{0};
@@ -353,8 +671,6 @@ struct GpuSmoothedAggregationContext::Impl {
             }
         }
 
-        // Invert node->aggregate ownership once during setup. Constrained nodes
-        // have no aggregate and are intentionally absent from the compact list.
         std::vector<std::uint32_t> host_aggregate_offsets(
             static_cast<std::size_t>(aggregate_count) + 1U, 0U);
         std::size_t owned_nodes = 0U;
@@ -398,7 +714,7 @@ struct GpuSmoothedAggregationContext::Impl {
         const std::size_t aggregate_bytes = host_aggregates.size() * sizeof(DeviceAggregateSa);
         aggregation_metadata_bytes = aggregate_offset_bytes + aggregate_node_bytes + aggregate_bytes;
         model_coordinate_bytes = host_coordinates.size() * sizeof(float);
-        fine_workspace_bytes = 3U * ndof * sizeof(float);
+        fine_workspace_bytes = 2U * ndof * sizeof(float);
         coarse_workspace_bytes = 2U * coarse_dof_count * sizeof(float);
 
         try {
@@ -419,8 +735,6 @@ struct GpuSmoothedAggregationContext::Impl {
                            "cudaMalloc(SA fine f0)");
             check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_f1), ndof * sizeof(float)),
                            "cudaMalloc(SA fine f1)");
-            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_f2), ndof * sizeof(float)),
-                           "cudaMalloc(SA fine f2)");
 
             check_cuda_pcg(cudaMemcpy(d_aggregate_offsets,
                                       host_aggregate_offsets.data(),
@@ -459,14 +773,13 @@ struct GpuSmoothedAggregationContext::Impl {
         if (d_coarse_y) cudaFree(d_coarse_y);
         if (d_f0) cudaFree(d_f0);
         if (d_f1) cudaFree(d_f1);
-        if (d_f2) cudaFree(d_f2);
         d_aggregate_offsets = nullptr;
         d_aggregate_nodes = nullptr;
         d_aggregates = nullptr;
         d_coordinates = nullptr;
         d_coarse_x = nullptr;
         d_coarse_y = nullptr;
-        d_f0 = d_f1 = d_f2 = nullptr;
+        d_f0 = d_f1 = nullptr;
     }
 
     void run_pipeline(std::size_t m,
@@ -492,30 +805,28 @@ struct GpuSmoothedAggregationContext::Impl {
                   d_coordinates, d_coarse_x, d_f0);
         mark(TimedStage::P0);
 
+        float* current = d_f0;
+        float* other = d_f1;
+        const float omega = static_cast<float>(omega_value);
         for (std::size_t step = 0; step < m; ++step) {
-            launch_pcg_matvec(mesh, block_y, nodes, d_f0, d_f1);
-            mark(TimedStage::FineA);
-            launch_pcg_jacobi(mesh, block_y, nodes, d_f1, d_f2);
-            mark(TimedStage::Jacobi);
-            launch_negative_axpy(ndof, static_cast<float>(omega_value), d_f2, d_f0);
-            mark(TimedStage::Update);
+            launch_forward_smooth(mesh, block_y, nodes, omega, current, other);
+            mark(TimedStage::ForwardSmooth);
+            std::swap(current, other);
         }
 
-        launch_pcg_matvec(mesh, block_y, nodes, d_f0, d_f1);
+        launch_pcg_matvec(mesh, block_y, nodes, current, other);
         mark(TimedStage::FineA);
+        std::swap(current, other);
 
         for (std::size_t step = 0; step < m; ++step) {
-            launch_pcg_jacobi(mesh, block_y, nodes, d_f1, d_f2);
-            mark(TimedStage::Jacobi);
-            launch_pcg_matvec(mesh, block_y, nodes, d_f2, d_f0);
-            mark(TimedStage::FineA);
-            launch_negative_axpy(ndof, static_cast<float>(omega_value), d_f0, d_f1);
-            mark(TimedStage::Update);
+            launch_transpose_smooth(mesh, block_y, nodes, omega, current, other);
+            mark(TimedStage::TransposeSmooth);
+            std::swap(current, other);
         }
 
         launch_p0t(nodes, aggregate_count, d_aggregate_offsets,
                    d_aggregate_nodes, d_aggregates,
-                   d_coordinates, d_f1, d_coarse_y);
+                   d_coordinates, current, d_coarse_y);
         mark(TimedStage::P0T);
     }
 };
@@ -558,7 +869,7 @@ GpuSmoothedAggregationApplyResult GpuSmoothedAggregationContext::apply(
     impl_->run_pipeline(transfer_smoothing_steps, nullptr, nullptr);
     check_cuda_pcg(cudaDeviceSynchronize(), "cudaDeviceSynchronize(SA warmup)");
 
-    const std::size_t intervals = 6U * transfer_smoothing_steps + 3U;
+    const std::size_t intervals = 2U * transfer_smoothing_steps + 3U;
     std::vector<cudaEvent_t> markers(intervals + 1U, nullptr);
     try {
         for (auto& event : markers) {
@@ -583,9 +894,9 @@ GpuSmoothedAggregationApplyResult GpuSmoothedAggregationContext::apply(
                 const double ms = static_cast<double>(elapsed_event(markers[i], markers[i + 1U]));
                 switch (stages[i]) {
                     case TimedStage::P0: sample.p0_ms += ms; break;
+                    case TimedStage::ForwardSmooth: sample.jacobi_ms += ms; break;
                     case TimedStage::FineA: sample.fine_operator_ms += ms; break;
-                    case TimedStage::Jacobi: sample.jacobi_ms += ms; break;
-                    case TimedStage::Update: sample.vector_update_ms += ms; break;
+                    case TimedStage::TransposeSmooth: sample.vector_update_ms += ms; break;
                     case TimedStage::P0T: sample.p0t_ms += ms; break;
                 }
             }
