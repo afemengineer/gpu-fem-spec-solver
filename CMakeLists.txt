@@ -96,6 +96,13 @@ if(GFSS_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         find_package(CUDAToolkit REQUIRED)
+        find_library(GFSS_CUBLAS_LIBRARY
+            NAMES cublas
+            HINTS
+                "${CUDAToolkit_LIBRARY_DIR}"
+                "${CUDAToolkit_ROOT}/lib/x64"
+            REQUIRED)
+        message(STATUS "cuBLAS library: ${GFSS_CUBLAS_LIBRARY}")
         list(APPEND GFSS_APP_SOURCES src/gpu_info.cu)
         set(GFSS_HAS_CUDA TRUE)
     else()
@@ -122,7 +129,7 @@ if(GFSS_HAS_CUDA)
         src/gpu_gold_sparse.cu
         src/gpu_pcg.cu
     )
-    target_link_libraries(gfss_cuda_operator PUBLIC gfss_core CUDA::cublas)
+    target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     set_target_properties(gfss_cuda_operator PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 
