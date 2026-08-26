@@ -88,6 +88,8 @@ endif()
 
 add_library(gfss_multigrid_reference STATIC
     src/multigrid_reference.cpp
+    src/multilevel_reference.cpp
+    src/aggregation_coarse_space.cpp
 )
 target_link_libraries(gfss_multigrid_reference PUBLIC gfss_core)
 target_include_directories(gfss_multigrid_reference PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -212,6 +214,10 @@ add_executable(gfss_geometric_vcycle_reference_bench benchmarks/geometric_vcycle
 target_link_libraries(gfss_geometric_vcycle_reference_bench PRIVATE gfss_multigrid_reference)
 target_include_directories(gfss_geometric_vcycle_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_executable(gfss_aggregation_coarse_space_bench benchmarks/aggregation_coarse_space_bench.cpp)
+target_link_libraries(gfss_aggregation_coarse_space_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_coarse_space_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 if(GFSS_BUILD_TESTS)
     enable_testing()
 
@@ -238,6 +244,14 @@ if(GFSS_BUILD_TESTS)
     add_executable(gfss_cpu_gold_test tests/cpu_gold_test.cpp)
     target_link_libraries(gfss_cpu_gold_test PRIVATE gfss_core)
     add_test(NAME cpu_gold COMMAND gfss_cpu_gold_test)
+
+    add_executable(gfss_multilevel_reference_test tests/multilevel_reference_test.cpp)
+    target_link_libraries(gfss_multilevel_reference_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME multilevel_reference COMMAND gfss_multilevel_reference_test)
+
+    add_executable(gfss_aggregation_coarse_space_test tests/aggregation_coarse_space_test.cpp)
+    target_link_libraries(gfss_aggregation_coarse_space_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME aggregation_coarse_space COMMAND gfss_aggregation_coarse_space_test)
 
     if(GFSS_HAS_CUDA)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
