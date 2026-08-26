@@ -388,7 +388,7 @@ struct GpuSmoothedAggregationContext::Impl {
                       std::vector<cudaEvent_t>* markers,
                       std::vector<TimedStage>* stages) {
         std::size_t marker_index = 0U;
-        const auto mark = [&](TimedStage stage) mutable {
+        auto mark = [&](TimedStage stage) {
             if (markers && stages) {
                 check_cuda_pcg(cudaEventRecord((*markers)[++marker_index]),
                                "cudaEventRecord(SA marker)");
