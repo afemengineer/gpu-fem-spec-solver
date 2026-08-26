@@ -107,11 +107,12 @@ int main(int argc, char** argv) {
                   << "converged=" << (result.converged ? "true" : "false")
                   << " iterations=" << result.iterations
                   << " matvecs=" << result.matvecs
-                  << " residual_replacements=" << result.residual_replacements << '\n'
+                  << " residual_audits=" << result.residual_audits << '\n'
                   << "solve_ms=" << result.solve_ms
                   << " ms_per_iteration=" << ms_per_iteration << '\n'
                   << std::scientific
-                  << "reported_relative_residual=" << result.reported_relative_residual << '\n'
+                  << "recursive_relative_residual=" << result.reported_relative_residual << '\n'
+                  << "gpu_audited_relative_residual=" << result.audited_relative_residual << '\n'
                   << "true_relative_residual=" << true_rel << '\n'
                   << std::fixed
                   << "explicit_device_vectors=" << mib << " MiB\n"
@@ -119,7 +120,7 @@ int main(int argc, char** argv) {
                   << "timing_excludes=allocation,stencil_setup,H2D,D2H,true_residual_audit\n";
 
         if (!result.converged) {
-            std::cerr << "WARNING: PCG did not reach the requested recomputed-residual tolerance\n";
+            std::cerr << "WARNING: PCG did not reach the requested audited-residual tolerance\n";
             return 2;
         }
         return 0;
