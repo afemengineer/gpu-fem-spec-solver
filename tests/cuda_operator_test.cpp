@@ -21,9 +21,8 @@ double relative_max_difference(const std::vector<double>& reference,
     double max_abs = 0.0;
     double scale = 0.0;
     for (std::size_t i = 0; i < reference.size(); ++i) {
-        max_abs = std::max(
-            max_abs,
-            std::abs(reference[i] - static_cast<double>(candidate[i])));
+        max_abs = std::max(max_abs,
+                           std::abs(reference[i] - static_cast<double>(candidate[i])));
         scale = std::max(scale, std::abs(reference[i]));
     }
     return max_abs / std::max(1.0, scale);
@@ -47,26 +46,37 @@ int main() {
     const auto cpu = gfss::apply_matrix_free(mesh, material, x_double);
     const auto atomic = gfss::apply_matrix_free_cuda_atomic(mesh, material, x_float, 2);
     const auto node = gfss::apply_node_stencil_cuda_soa(mesh, material, x_float, 2, 256);
+    const auto gold3d = gfss::apply_node_stencil_cuda_gold3d(mesh, material, x_float, 2, 8);
 
     const double atomic_rel = relative_max_difference(cpu, atomic.y);
     const double node_rel = relative_max_difference(cpu, node.y);
+    const double gold3d_rel = relative_max_difference(cpu, gold3d.y);
 
     require(atomic_rel < 2.0e-5,
             "FP32 CUDA atomic operator must match double CPU reference within tolerance");
     require(node_rel < 2.0e-5,
             "FP32 CUDA node stencil must match double CPU reference within tolerance");
+    require(gold3d_rel < 2.0e-5,
+            "FP32 CUDA Gold3D stencil must match double CPU reference within tolerance");
     require(atomic.timing.best_ms > 0.0, "CUDA atomic timing must be positive");
     require(node.timing.best_ms > 0.0, "CUDA node timing must be positive");
+    require(gold3d.timing.best_ms > 0.0, "CUDA Gold3D timing must be positive");
     require(atomic.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA atomic device-vector accounting mismatch");
     require(node.device_bytes == 2 * x_float.size() * sizeof(float),
             "CUDA node device-vector accounting mismatch");
+    require(gold3d.device_bytes == 2 * x_float.size() * sizeof(float),
+            "CUDA Gold3D device-vector accounting mismatch");
     require(node.timing.median_zero_ms == 0.0,
             "CUDA node stencil must not require output zeroing");
+    require(gold3d.timing.median_zero_ms == 0.0,
+            "CUDA Gold3D stencil must not require output zeroing");
 
     std::cout << "CUDA operator checks passed; atomic_rel_max=" << atomic_rel
               << " node_rel_max=" << node_rel
+              << " gold3d_rel_max=" << gold3d_rel
               << " atomic_best_ms=" << atomic.timing.best_ms
-              << " node_best_ms=" << node.timing.best_ms << '\n';
+              << " node_best_ms=" << node.timing.best_ms
+              << " gold3d_best_ms=" << gold3d.timing.best_ms << '\n';
     return 0;
 }
