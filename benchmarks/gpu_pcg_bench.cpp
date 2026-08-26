@@ -106,7 +106,8 @@ int main(int argc, char** argv) {
                   << " max_iterations=" << std::fixed << max_iterations << '\n'
                   << "converged=" << (result.converged ? "true" : "false")
                   << " iterations=" << result.iterations
-                  << " matvecs=" << result.matvecs << '\n'
+                  << " matvecs=" << result.matvecs
+                  << " residual_replacements=" << result.residual_replacements << '\n'
                   << "solve_ms=" << result.solve_ms
                   << " ms_per_iteration=" << ms_per_iteration << '\n'
                   << std::scientific
@@ -118,7 +119,7 @@ int main(int argc, char** argv) {
                   << "timing_excludes=allocation,stencil_setup,H2D,D2H,true_residual_audit\n";
 
         if (!result.converged) {
-            std::cerr << "WARNING: PCG did not reach the requested recursive-residual tolerance\n";
+            std::cerr << "WARNING: PCG did not reach the requested recomputed-residual tolerance\n";
             return 2;
         }
         return 0;
