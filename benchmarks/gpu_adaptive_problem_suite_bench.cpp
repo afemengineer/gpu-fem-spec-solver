@@ -222,7 +222,7 @@ void print_result(const CaseDef& test,
                   << " iterations=" << step.inner_iterations
                   << " audits=" << step.inner_audits
                   << " predicted_outer=" << step.predicted_outer_corrections
-                  << " economic_stop=" << (step.inner_economic_stop ? "true" : "false")
+                  << " economic_stop=" << (step.economic_stop ? "true" : "false")
                   << " stagnated=" << (step.inner_stagnated ? "true" : "false")
                   << " solve_ms=" << step.inner_solve_ms
                   << std::scientific << '\n';
