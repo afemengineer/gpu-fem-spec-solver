@@ -521,6 +521,7 @@ void run_actual_a2_reference(std::size_t fine_transfer_steps,
 
 }  // namespace
 
+#ifndef GFSS_RECURSIVE_SA_ACTUAL_A2_NO_MAIN
 int main(int argc, char** argv) {
     try {
         const std::size_t m0 = argc > 1
@@ -567,3 +568,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+#endif
