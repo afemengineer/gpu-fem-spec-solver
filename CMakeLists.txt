@@ -198,6 +198,21 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_smoothed_coarse_action_bench benchmarks/gpu_smoothed_coarse_action_bench.cpp)
     target_link_libraries(gfss_gpu_smoothed_coarse_action_bench PRIVATE gfss_cuda_operator gfss_multigrid_reference)
     target_include_directories(gfss_gpu_smoothed_coarse_action_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # Standalone CUDA TU for the fixed-budget coarse-PCG experiment. It includes
+    # the smoothed-aggregation implementation directly so the benchmark can keep
+    # Krylov vectors device-resident without exposing internal device pointers in
+    # the production library. Do not link gfss_cuda_operator here: that would
+    # duplicate the included CUDA symbols.
+    add_executable(gfss_gpu_inexact_coarse_sweep_bench benchmarks/gpu_inexact_coarse_sweep_bench.cu)
+    target_link_libraries(gfss_gpu_inexact_coarse_sweep_bench PRIVATE
+        gfss_multigrid_reference
+        "${GFSS_CUBLAS_LIBRARY}")
+    target_include_directories(gfss_gpu_inexact_coarse_sweep_bench PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(gfss_gpu_inexact_coarse_sweep_bench PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
