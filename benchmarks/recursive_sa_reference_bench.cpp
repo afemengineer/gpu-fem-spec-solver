@@ -52,7 +52,6 @@ struct CandidateAggregate {
     std::vector<std::size_t> fine_dofs;
     std::size_t coarse_offset{0};
     std::size_t rank{0};
-    // Row-major [fine_dofs.size()][rank].
     std::vector<double> q_values;
 };
 
@@ -60,7 +59,7 @@ struct CandidateTransfer {
     std::size_t fine_dofs{0};
     std::size_t coarse_dofs{0};
     std::vector<CandidateAggregate> aggregates;
-    std::vector<double> coarse_candidates; // row-major [coarse_dofs][6]
+    std::vector<double> coarse_candidates;
     AlgebraicNodeGraph coarse_graph;
 
     Vec prolong(const Vec& coarse) const {
@@ -196,7 +195,7 @@ struct FineSmoothedTransfer {
 
 struct DenseCholesky {
     std::size_t n{0};
-    std::vector<double> lower; // row-major lower triangular
+    std::vector<double> lower;
     double symmetry_relative_defect{0.0};
     double min_pivot{0.0};
 
@@ -370,8 +369,27 @@ void chebyshev_smooth(const Apply& apply,
 AlgebraicNodeGraph graph_from_variable_blocks(
     const gfss::AggregationVariableBlockMatrix& matrix) {
     const std::size_t nodes = matrix.aggregate_ranks.size();
+    if (matrix.aggregate_offsets.size() != nodes ||
+        matrix.block_row_offsets.size() != nodes + 1U) {
+        throw std::invalid_argument("recursive SA variable-block graph metadata size mismatch");
+    }
+
     AlgebraicNodeGraph graph;
-    graph.dof_offsets = matrix.aggregate_offsets;
+    // AggregationVariableBlockMatrix stores one start offset per aggregate.
+    // AlgebraicNodeGraph uses CSR-style DOF offsets and therefore requires the
+    // terminal total-DOF sentinel as entry N+1.
+    graph.dof_offsets.resize(nodes + 1U, 0U);
+    for (std::size_t a = 0; a < nodes; ++a) {
+        graph.dof_offsets[a] = matrix.aggregate_offsets[a];
+    }
+    graph.dof_offsets[nodes] = matrix.coarse_dofs;
+    for (std::size_t a = 0; a < nodes; ++a) {
+        if (graph.dof_offsets[a] > graph.dof_offsets[a + 1U] ||
+            graph.dof_offsets[a + 1U] - graph.dof_offsets[a] != matrix.aggregate_ranks[a]) {
+            throw std::runtime_error("recursive SA variable-rank DOF offsets are inconsistent");
+        }
+    }
+
     graph.row_offsets.resize(nodes + 1U, 0U);
     std::size_t cursor = 0U;
     for (std::size_t row = 0; row < nodes; ++row) {
