@@ -1,11 +1,11 @@
 // Numerical-reference experiment: keep the validated actual-A2 hierarchy and
 // replace only the L2 scalar Jacobi metric with exact algebraic-node block
 // Jacobi. The diagonal blocks are taken directly from the materialized smoothed
-// Galerkin A2. This file includes the previous reference TU only to reuse its
-// setup, graph, candidate, and dense-operator helpers.
-#define main gfss_recursive_sa_actual_a2_reference_main
+// Galerkin A2. Reuse the actual-A2 helper implementation but suppress its entry
+// point so this translation unit owns the benchmark main().
+#define GFSS_RECURSIVE_SA_ACTUAL_A2_NO_MAIN
 #include "recursive_sa_actual_a2_reference_bench.cpp"
-#undef main
+#undef GFSS_RECURSIVE_SA_ACTUAL_A2_NO_MAIN
 
 namespace {
 
