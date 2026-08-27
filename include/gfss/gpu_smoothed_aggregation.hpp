@@ -31,6 +31,14 @@ struct GpuSmoothedAggregationApplyResult {
     std::size_t model_coordinate_bytes{0};
 };
 
+struct GpuSmoothedAggregationCoarsePcgResult {
+    std::vector<float> x;
+    std::size_t iterations{0};
+    double relative_residual{0.0};
+    double solve_ms{0.0};
+    std::size_t persistent_coarse_pcg_bytes{0};
+};
+
 // Persistent GPU implementation of
 //
 //   y_c = P_m^T A P_m x_c,
@@ -41,10 +49,9 @@ struct GpuSmoothedAggregationApplyResult {
 // owns one aggregate, P0 writes uniquely owned fine nodes, and P0^T performs a
 // warp-local reduction followed by one direct store per coarse DOF. Therefore
 // tentative restriction needs neither global atomics nor a coarse-vector
-// memset. The context keeps all work vectors and metadata resident across
-// applies. The structured-Q1 path deliberately reuses the existing
-// GoldSparse/Jacobi kernels so stage timings remain directly comparable with
-// the M2/M3 operator work.
+// memset. Fused forward and exact-transpose smoothing ping-pong two persistent
+// fine FP32 work vectors. The structured-Q1 path deliberately reuses the
+// existing GoldSparse stencil data so timings remain comparable with M2/M3.
 class GpuSmoothedAggregationContext {
 public:
     GpuSmoothedAggregationContext(
@@ -64,6 +71,18 @@ public:
         const std::vector<float>& coarse_x,
         std::size_t transfer_smoothing_steps,
         int repeats = 20);
+
+    // Fixed-budget FP32 PCG on A_c=P_m^T A P_m. The tentative A_c inverse
+    // diagonal is supplied by the reference setup and used only as a Jacobi
+    // preconditioner. All Krylov vectors, coarse matvecs and updates stay on
+    // device during the timed iteration loop; H2D setup and final D2H are
+    // excluded. This is intentionally a budget experiment, so it performs
+    // exactly max_iterations unless numerical breakdown occurs.
+    GpuSmoothedAggregationCoarsePcgResult solve_coarse_pcg_fixed_iterations(
+        const std::vector<float>& rhs,
+        const std::vector<float>& inverse_preconditioner,
+        std::size_t transfer_smoothing_steps,
+        std::size_t max_iterations);
 
     std::size_t fine_dofs() const noexcept;
     std::size_t coarse_dofs() const noexcept;
