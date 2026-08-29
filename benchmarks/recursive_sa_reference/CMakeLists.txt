@@ -74,3 +74,10 @@ target_link_libraries(gfss_recursive_sa_strength_local_l2_reference_bench PRIVAT
     gfss_multigrid_reference)
 target_include_directories(gfss_recursive_sa_strength_local_l2_reference_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include)
+
+add_executable(gfss_recursive_sa_compatible_relaxation_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../recursive_sa_compatible_relaxation_bench.cpp)
+target_link_libraries(gfss_recursive_sa_compatible_relaxation_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_recursive_sa_compatible_relaxation_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include)
