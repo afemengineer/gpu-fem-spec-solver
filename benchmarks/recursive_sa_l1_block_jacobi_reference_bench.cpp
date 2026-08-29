@@ -2,6 +2,15 @@
 // smoothed first coarse operator A1 = P0^T A0 P0 without materializing A1.
 // For m0=1 each smoothed aggregate basis has one-ring nodal support, so its
 // diagonal Galerkin block can be assembled exactly from local HEX8 energies.
+//
+// This source is also reused as an implementation unit by deeper recursive
+// numerical references. Detect that include mode before helper sources can
+// redefine/undefine the main macro, then suppress this file's entry point.
+#ifdef main
+#define GFSS_RECURSIVE_SA_L1_BLOCK_NO_MAIN
+#undef main
+#endif
+
 #define GFSS_RECURSIVE_SA_ACTUAL_A2_NO_MAIN
 #include "recursive_sa_actual_a2_reference_bench.cpp"
 #undef GFSS_RECURSIVE_SA_ACTUAL_A2_NO_MAIN
@@ -698,6 +707,7 @@ void run_l1_block_reference(
 
 }  // namespace
 
+#ifndef GFSS_RECURSIVE_SA_L1_BLOCK_NO_MAIN
 int main(int argc, char** argv) {
     try {
         const std::size_t m0 = argc > 1 ? static_cast<std::size_t>(std::stoull(argv[1])) : 1U;
@@ -731,3 +741,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+#endif
