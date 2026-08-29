@@ -95,3 +95,10 @@ target_link_libraries(gfss_recursive_sa_block_cr_spectral_enrichment_sweep_bench
     gfss_multigrid_reference)
 target_include_directories(gfss_recursive_sa_block_cr_spectral_enrichment_sweep_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include)
+
+add_executable(gfss_recursive_sa_full_vcycle_spectral_diagnostic_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../recursive_sa_full_vcycle_spectral_diagnostic_bench.cpp)
+target_link_libraries(gfss_recursive_sa_full_vcycle_spectral_diagnostic_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_recursive_sa_full_vcycle_spectral_diagnostic_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include)
