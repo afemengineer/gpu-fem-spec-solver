@@ -108,7 +108,11 @@ void mg_gamma_cycle(std::size_t level_index,
     visit.coarse_rhs_norm = norm(coarse_b);
 
     Vec coarse_e(coarse.dofs, 0.0);
-    for (std::size_t rep = 0; rep < gamma; ++rep) {
+    // Once the next level is the exact direct bottom, additional recursive
+    // calls are identical overwrites and add cost without changing the cycle.
+    const std::size_t recursive_repetitions =
+        level_index + 2U == levels.size() ? 1U : gamma;
+    for (std::size_t rep = 0; rep < recursive_repetitions; ++rep) {
         mg_gamma_cycle(level_index + 1U,
                        levels,
                        coarse_b,
