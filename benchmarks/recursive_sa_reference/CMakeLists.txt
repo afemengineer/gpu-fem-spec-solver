@@ -109,3 +109,10 @@ target_link_libraries(gfss_recursive_sa_gamma_cycle_sweep_bench PRIVATE
     gfss_multigrid_reference)
 target_include_directories(gfss_recursive_sa_gamma_cycle_sweep_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include)
+
+add_executable(gfss_recursive_sa_selective_gamma_sweep_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../recursive_sa_selective_gamma_sweep_bench.cpp)
+target_link_libraries(gfss_recursive_sa_selective_gamma_sweep_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_recursive_sa_selective_gamma_sweep_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include)
