@@ -536,6 +536,7 @@ void run_selective_pcg_bench(std::size_t max_iterations,
 
 }  // namespace
 
+#ifndef GFSS_RECURSIVE_SA_SELECTIVE_PCG_NO_MAIN
 int main(int argc, char** argv) {
     try {
         const std::size_t max_iterations = argc > 1
@@ -561,3 +562,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+#endif
