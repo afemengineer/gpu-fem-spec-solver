@@ -1,5 +1,6 @@
-// M5 per-level symmetric Chebyshev smoothing sweep for the frozen 1x1
-// recursive SA multigrid preconditioner inside strict FP64 PCG.
+// M5 final CPU-reference smoother tuning for the frozen 1x1 recursive SA
+// multigrid preconditioner inside strict FP64 PCG.
+// L2 smoothing is frozen at degree 1. Sweep L0=1..5 and L1=1..3.
 #include "recursive_sa_local_l2_helpers.inc"
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
 #include "recursive_sa_cr_oracle_helpers.inc"
@@ -12,9 +13,9 @@
 
 namespace {
 
-struct LevelSmoothingPolicy {
-    const char* label;
-    MgLevelSmoothingSchedule degrees;
+struct FinalTuningPolicy {
+    std::string label;
+    MgLevelSmoothingSchedule degrees{};
 };
 
 struct DirectFineApplyCounter {
@@ -22,27 +23,21 @@ struct DirectFineApplyCounter {
     double ms{0.0};
 };
 
-struct LevelSmoothingSweepPoint {
-    LevelSmoothingPolicy policy{};
+struct FinalTuningPoint {
+    FinalTuningPolicy policy;
     MgPreconditionerAudit audit;
     MgLevelSmoothingPcgResult pcg;
     DirectFineApplyCounter direct_fine_counter;
+    std::size_t fine_equivalent_per_preconditioner{0U};
+    std::size_t fine_equivalent_total{0U};
     bool theory_valid{false};
 };
 
-void print_level_smoothing_history(const LevelSmoothingSweepPoint& p) {
-    std::cout << "\nLEVEL_SMOOTHING_PCG_HISTORY policy=" << p.policy.label << '\n'
-              << std::fixed << std::setprecision(6)
-              << "solve_ms=" << p.pcg.solve_ms
-              << " converged=" << (p.pcg.converged ? "true" : "false")
-              << " iterations=" << p.pcg.iterations
-              << " breakdown=" << (p.pcg.breakdown ? "true" : "false");
-    if (p.pcg.breakdown) std::cout << " breakdown_reason=" << p.pcg.breakdown_reason;
-    std::cout << '\n';
+void print_residual_history(const char* tag, const FinalTuningPoint& p) {
+    std::cout << "\n" << tag << " policy=" << p.policy.label << '\n';
     for (std::size_t i = 0; i < p.pcg.true_relative_residuals.size(); ++i) {
         std::cout << std::scientific << std::setprecision(9)
-                  << "true_residual[" << i << "]="
-                  << p.pcg.true_relative_residuals[i];
+                  << "true_residual[" << i << "]=" << p.pcg.true_relative_residuals[i];
         if (i > 0U) {
             std::cout << " iteration_q="
                       << p.pcg.true_relative_residuals[i] /
@@ -52,59 +47,31 @@ void print_level_smoothing_history(const LevelSmoothingSweepPoint& p) {
     }
 }
 
-void print_level_smoothing_profile(const LevelSmoothingSweepPoint& p) {
-    const auto& prof = p.pcg.preconditioner_profile;
-    const double denom = std::max(p.pcg.preconditioner_ms, 1.0e-300);
-    const double accounted = prof.accounted_ms();
-    const double calls = static_cast<double>(std::max<std::size_t>(
-        1U, p.pcg.preconditioner_applications));
-    std::cout << "\nLEVEL_SMOOTHING_PCG_PROFILE policy=" << p.policy.label << '\n'
-              << std::fixed << std::setprecision(6)
-              << "preconditioner_ms=" << p.pcg.preconditioner_ms
-              << " accounted_ms=" << accounted
-              << " unaccounted_ms=" << (p.pcg.preconditioner_ms - accounted) << '\n'
-              << "pre_smooth_ms=" << prof.pre_smooth_ms
-              << " pre_smooth_fraction=" << prof.pre_smooth_ms / denom
-              << " residual_apply_ms=" << prof.residual_apply_ms
-              << " residual_apply_fraction=" << prof.residual_apply_ms / denom << '\n'
-              << "restrict_ms=" << prof.restrict_ms
-              << " restrict_fraction=" << prof.restrict_ms / denom
-              << " prolong_ms=" << prof.prolong_ms
-              << " prolong_fraction=" << prof.prolong_ms / denom << '\n'
-              << "post_smooth_ms=" << prof.post_smooth_ms
-              << " post_smooth_fraction=" << prof.post_smooth_ms / denom
-              << " bottom_solve_ms=" << prof.bottom_solve_ms
-              << " bottom_solve_fraction=" << prof.bottom_solve_ms / denom << '\n'
-              << "L0_visits_per_preconditioner=" << prof.level_visits[0] / calls
-              << " L1_visits_per_preconditioner=" << prof.level_visits[1] / calls
-              << " L2_visits_per_preconditioner=" << prof.level_visits[2] / calls
-              << " L3_visits_per_preconditioner=" << prof.level_visits[3] / calls << '\n';
-}
-
-void run_level_smoothing_pcg_sweep(std::size_t max_iterations,
-                                   double tolerance,
-                                   std::size_t target_nodes,
-                                   std::size_t min_nodes) {
+void run_final_smoothing_tuning(std::size_t max_iterations,
+                                double tolerance,
+                                std::size_t target_nodes,
+                                std::size_t min_nodes) {
     constexpr std::size_t m0 = 1U;
     constexpr std::size_t m1 = 2U;
     constexpr std::size_t m2 = 1U;
     constexpr double strength_threshold = 0.05;
     constexpr double symmetry_accept = 1.0e-10;
     constexpr double linearity_accept = 1.0e-11;
-    const std::array<LevelSmoothingPolicy, 8> policies{{
-        {"1x1x1", {1U, 1U, 1U}},
-        {"2x1x1", {2U, 1U, 1U}},
-        {"1x2x1", {1U, 2U, 1U}},
-        {"2x2x1", {2U, 2U, 1U}},
-        {"1x1x2", {1U, 1U, 2U}},
-        {"2x1x2", {2U, 1U, 2U}},
-        {"1x2x2", {1U, 2U, 2U}},
-        {"2x2x2", {2U, 2U, 2U}},
-    }};
 
     if (max_iterations == 0U || !(tolerance > 0.0) || tolerance >= 1.0 ||
         target_nodes < 2U || min_nodes == 0U || min_nodes > target_nodes) {
-        throw std::invalid_argument("invalid level-smoothing PCG sweep options");
+        throw std::invalid_argument("invalid final smoothing-tuning options");
+    }
+
+    std::vector<FinalTuningPolicy> policies;
+    policies.reserve(15U);
+    for (std::size_t l0 = 1U; l0 <= 5U; ++l0) {
+        for (std::size_t l1 = 1U; l1 <= 3U; ++l1) {
+            FinalTuningPolicy p;
+            p.label = std::to_string(l0) + "x" + std::to_string(l1) + "x1";
+            p.degrees = {l0, l1, 1U};
+            policies.push_back(std::move(p));
+        }
     }
 
     const gfss::StructuredHexMesh mesh{64U, 64U, 8U, 1.0, 1.0, 0.125};
@@ -259,12 +226,12 @@ void run_level_smoothing_pcg_sweep(std::size_t max_iterations,
     const auto rhs = make_rhs(mesh);
     const auto sanitize_probe = [&](Vec& v) { clamp_x0(mesh, v); };
 
-    std::cout << "GFSS M5 1x1 MG-PCG per-level symmetric smoothing sweep\n"
+    std::cout << "GFSS M5 final 1x1 MG-PCG L0/L1 smoother tuning grid\n"
               << "problem=thin_plate mesh=64x64x8\n"
               << "reference_execution=cpu_fp64\n"
               << "hierarchy=frozen_theta_0p05_actual_metrics\n"
               << "recursive_schedule=1x1\n"
-              << "policies=1x1x1,2x1x1,1x2x1,2x2x1,1x1x2,2x1x2,1x2x2,2x2x2\n"
+              << "L0_degree_range=1..5 L1_degree_range=1..3 L2_degree=1\n"
               << "policy_semantics=L0_degree_x_L1_degree_x_L2_degree\n"
               << "symmetric_within_each_level=true\n"
               << "fixed_transfer_smoothing_steps=m0:1,m1:2,m2:1\n"
@@ -301,10 +268,10 @@ void run_level_smoothing_pcg_sweep(std::size_t max_iterations,
               << "L1_transfer_adjoint_relative_error=" << transfer1_adjoint
               << " L2_transfer_adjoint_relative_error=" << transfer2_adjoint << '\n';
 
-    std::vector<LevelSmoothingSweepPoint> points;
+    std::vector<FinalTuningPoint> points;
     points.reserve(policies.size());
     for (const auto& policy : policies) {
-        LevelSmoothingSweepPoint p;
+        FinalTuningPoint p;
         p.policy = policy;
         p.audit = mg_audit_level_smoothing_preconditioner(
             levels, policy.degrees, sanitize_probe);
@@ -312,80 +279,42 @@ void run_level_smoothing_pcg_sweep(std::size_t max_iterations,
             p.audit.max_symmetry_relative_defect <= symmetry_accept &&
             p.audit.max_linearity_relative_error <= linearity_accept;
 
-        std::cout << "\nLEVEL_SMOOTHING_PCG_PRECONDITIONER_AUDIT policy="
-                  << policy.label << '\n'
-                  << std::scientific << std::setprecision(9)
-                  << "max_symmetry_relative_defect="
-                  << p.audit.max_symmetry_relative_defect
-                  << " max_linearity_relative_error="
-                  << p.audit.max_linearity_relative_error
-                  << " min_normalized_quadratic="
-                  << p.audit.min_normalized_quadratic
-                  << " positive=" << (p.audit.positive ? "true" : "false")
-                  << " pcg_theory_valid=" << (p.theory_valid ? "true" : "false")
-                  << '\n';
-
         active_fine_counter = &p.direct_fine_counter;
         p.pcg = mg_solve_level_smoothing_pcg(
             levels, rhs, tolerance, max_iterations, policy.degrees);
         active_fine_counter = nullptr;
 
-        print_level_smoothing_history(p);
-        print_level_smoothing_profile(p);
-        points.push_back(std::move(p));
-    }
-
-    std::cout << "\nLEVEL_SMOOTHING_PCG_SUMMARY\n";
-    const LevelSmoothingSweepPoint* fastest_verified = nullptr;
-    const LevelSmoothingSweepPoint* minimum_equiv_work = nullptr;
-    const LevelSmoothingSweepPoint* fewest_iterations = nullptr;
-    for (const auto& p : points) {
-        const auto equiv_per_precond =
+        p.fine_equivalent_per_preconditioner =
             mg_level_smoothing_fine_operator_equivalent_per_preconditioner(
-                p.policy.degrees);
-        const std::size_t equiv_total =
-            p.pcg.preconditioner_applications * equiv_per_precond +
+                policy.degrees);
+        p.fine_equivalent_total =
+            p.pcg.preconditioner_applications * p.fine_equivalent_per_preconditioner +
             p.pcg.pcg_operator_applications +
             p.pcg.verification_operator_applications;
-        const double core_ms = std::max(0.0, p.pcg.solve_ms - p.pcg.verification_ms);
-        const double precond_per_apply = p.pcg.preconditioner_applications > 0U
+
+        const double preconditioner_per_apply = p.pcg.preconditioner_applications > 0U
             ? p.pcg.preconditioner_ms /
               static_cast<double>(p.pcg.preconditioner_applications)
             : std::numeric_limits<double>::quiet_NaN();
+        const double core_ms = std::max(0.0, p.pcg.solve_ms - p.pcg.verification_ms);
 
-        if (p.pcg.converged && !p.pcg.breakdown && p.theory_valid) {
-            if (fastest_verified == nullptr ||
-                p.pcg.solve_ms < fastest_verified->pcg.solve_ms) {
-                fastest_verified = &p;
-            }
-            if (fewest_iterations == nullptr ||
-                p.pcg.iterations < fewest_iterations->pcg.iterations) {
-                fewest_iterations = &p;
-            }
-            if (minimum_equiv_work == nullptr) {
-                minimum_equiv_work = &p;
-            } else {
-                const auto best_per =
-                    mg_level_smoothing_fine_operator_equivalent_per_preconditioner(
-                        minimum_equiv_work->policy.degrees);
-                const std::size_t best_total =
-                    minimum_equiv_work->pcg.preconditioner_applications * best_per +
-                    minimum_equiv_work->pcg.pcg_operator_applications +
-                    minimum_equiv_work->pcg.verification_operator_applications;
-                if (equiv_total < best_total) minimum_equiv_work = &p;
-            }
-        }
+        std::cout << "\nFINAL_TUNING_PCG_PRECONDITIONER_AUDIT policy=" << policy.label
+                  << " max_symmetry_relative_defect=" << std::scientific
+                  << std::setprecision(9) << p.audit.max_symmetry_relative_defect
+                  << " max_linearity_relative_error=" << p.audit.max_linearity_relative_error
+                  << " min_normalized_quadratic=" << p.audit.min_normalized_quadratic
+                  << " positive=" << (p.audit.positive ? "true" : "false")
+                  << " pcg_theory_valid=" << (p.theory_valid ? "true" : "false") << '\n';
 
-        std::cout << "policy=" << p.policy.label
-                  << " L0_degree=" << p.policy.degrees[0]
-                  << " L1_degree=" << p.policy.degrees[1]
-                  << " L2_degree=" << p.policy.degrees[2]
-                  << " pcg_theory_valid=" << (p.theory_valid ? "true" : "false")
+        std::cout << "FINAL_TUNING_PCG_RESULT policy=" << policy.label
+                  << " L0_degree=" << policy.degrees[0]
+                  << " L1_degree=" << policy.degrees[1]
+                  << " L2_degree=" << policy.degrees[2]
                   << " converged=" << (p.pcg.converged ? "true" : "false")
                   << " breakdown=" << (p.pcg.breakdown ? "true" : "false")
                   << " iterations=" << p.pcg.iterations
-                  << std::scientific << std::setprecision(9)
-                  << " final_true_relative_residual="
+                  << " final_true_relative_residual=" << std::scientific
+                  << std::setprecision(9)
                   << (p.pcg.true_relative_residuals.empty()
                         ? std::numeric_limits<double>::quiet_NaN()
                         : p.pcg.true_relative_residuals.back())
@@ -394,79 +323,102 @@ void run_level_smoothing_pcg_sweep(std::size_t max_iterations,
                   << " core_ms_excluding_verification=" << core_ms
                   << " verification_ms=" << p.pcg.verification_ms
                   << " preconditioner_ms=" << p.pcg.preconditioner_ms
-                  << " preconditioner_ms_per_apply=" << precond_per_apply
+                  << " preconditioner_ms_per_apply=" << preconditioner_per_apply
                   << " preconditioner_applications=" << p.pcg.preconditioner_applications
-                  << " fine_A0_equivalent_per_preconditioner=" << equiv_per_precond
-                  << " fine_A0_equivalent_total=" << equiv_total
-                  << " direct_wrapper_fine_A0_calls_total="
-                  << p.direct_fine_counter.calls
-                  << " direct_wrapper_fine_A0_ms_total="
-                  << p.direct_fine_counter.ms
+                  << " fine_A0_equivalent_per_preconditioner="
+                  << p.fine_equivalent_per_preconditioner
+                  << " fine_A0_equivalent_total=" << p.fine_equivalent_total
+                  << " direct_wrapper_fine_A0_calls_total=" << p.direct_fine_counter.calls
+                  << " direct_wrapper_fine_A0_ms_total=" << p.direct_fine_counter.ms
                   << std::scientific << std::setprecision(9)
                   << " max_recurrence_vs_true_residual_drift="
-                  << p.pcg.max_recurrence_vs_true_residual_drift
-                  << " preconditioner_symmetry_defect="
-                  << p.audit.max_symmetry_relative_defect
-                  << " preconditioner_linearity_error="
-                  << p.audit.max_linearity_relative_error
-                  << '\n';
+                  << p.pcg.max_recurrence_vs_true_residual_drift << '\n';
+
+        points.push_back(std::move(p));
     }
 
-    std::cout << "\nLEVEL_SMOOTHING_PCG_VERDICT\n"
-              << "fastest_verified_policy="
-              << (fastest_verified != nullptr ? fastest_verified->policy.label : "none") << '\n'
-              << "minimum_equivalent_work_policy="
-              << (minimum_equiv_work != nullptr ? minimum_equiv_work->policy.label : "none") << '\n'
-              << "fewest_iterations_verified_policy="
-              << (fewest_iterations != nullptr ? fewest_iterations->policy.label : "none") << '\n';
+    const FinalTuningPoint* fastest = nullptr;
+    const FinalTuningPoint* minimum_work = nullptr;
+    const FinalTuningPoint* fewest_iterations = nullptr;
+    for (const auto& p : points) {
+        if (!p.theory_valid || !p.pcg.converged || p.pcg.breakdown) continue;
+        if (fastest == nullptr || p.pcg.solve_ms < fastest->pcg.solve_ms) fastest = &p;
+        if (minimum_work == nullptr ||
+            p.fine_equivalent_total < minimum_work->fine_equivalent_total) {
+            minimum_work = &p;
+        }
+        if (fewest_iterations == nullptr ||
+            p.pcg.iterations < fewest_iterations->pcg.iterations) {
+            fewest_iterations = &p;
+        }
+    }
 
-    const auto find_policy = [&](const char* label) -> const LevelSmoothingSweepPoint* {
+    const auto find_policy = [&](const char* label) -> const FinalTuningPoint* {
         for (const auto& p : points) {
-            if (std::string(p.policy.label) == label) return &p;
+            if (p.policy.label == label) return &p;
         }
         return nullptr;
     };
-    const auto* p111 = find_policy("1x1x1");
-    const auto* p211 = find_policy("2x1x1");
-    const auto* p121 = find_policy("1x2x1");
-    const auto* p221 = find_policy("2x2x1");
-    const auto* p112 = find_policy("1x1x2");
-    const auto* p222 = find_policy("2x2x2");
-    if (p111 && p211 && p121 && p221 && p112 && p222) {
+    const auto* anchor211 = find_policy("2x1x1");
+    const auto* anchor221 = find_policy("2x2x1");
+
+    std::cout << "\nFINAL_TUNING_PCG_VERDICT\n"
+              << "fastest_verified_policy="
+              << (fastest != nullptr ? fastest->policy.label : "none") << '\n'
+              << "minimum_equivalent_work_policy="
+              << (minimum_work != nullptr ? minimum_work->policy.label : "none") << '\n'
+              << "fewest_iterations_verified_policy="
+              << (fewest_iterations != nullptr ? fewest_iterations->policy.label : "none") << '\n';
+
+    if (anchor211 != nullptr && anchor221 != nullptr) {
         std::cout << std::fixed << std::setprecision(6)
-                  << "anchor_1x1x1_solve_ms=" << p111->pcg.solve_ms
-                  << " anchor_1x1x1_iterations=" << p111->pcg.iterations
-                  << " expected_previous_iterations=16\n"
-                  << "anchor_2x2x2_solve_ms=" << p222->pcg.solve_ms
-                  << " anchor_2x2x2_iterations=" << p222->pcg.iterations
-                  << " expected_previous_iterations=12\n"
-                  << "delta_iterations_L0_only="
-                  << static_cast<long long>(p211->pcg.iterations) -
-                     static_cast<long long>(p111->pcg.iterations)
-                  << " delta_iterations_L1_only="
-                  << static_cast<long long>(p121->pcg.iterations) -
-                     static_cast<long long>(p111->pcg.iterations)
-                  << " delta_iterations_L2_only="
-                  << static_cast<long long>(p112->pcg.iterations) -
-                     static_cast<long long>(p111->pcg.iterations)
-                  << " delta_iterations_L0L1="
-                  << static_cast<long long>(p221->pcg.iterations) -
-                     static_cast<long long>(p111->pcg.iterations)
-                  << '\n';
+                  << "anchor_2x1x1_solve_ms=" << anchor211->pcg.solve_ms
+                  << " anchor_2x1x1_iterations=" << anchor211->pcg.iterations
+                  << " expected_previous_iterations=13"
+                  << " anchor_2x1x1_fine_A0_equivalent_total="
+                  << anchor211->fine_equivalent_total << '\n'
+                  << "anchor_2x2x1_solve_ms=" << anchor221->pcg.solve_ms
+                  << " anchor_2x2x1_iterations=" << anchor221->pcg.iterations
+                  << " expected_previous_iterations=12"
+                  << " anchor_2x2x1_fine_A0_equivalent_total="
+                  << anchor221->fine_equivalent_total << '\n';
     }
 
-    if (fastest_verified != nullptr) {
-        const auto per = mg_level_smoothing_fine_operator_equivalent_per_preconditioner(
-            fastest_verified->policy.degrees);
-        const std::size_t total =
-            fastest_verified->pcg.preconditioner_applications * per +
-            fastest_verified->pcg.pcg_operator_applications +
-            fastest_verified->pcg.verification_operator_applications;
+    if (fastest != nullptr) {
         std::cout << "fastest_verified_solve_ms=" << std::fixed << std::setprecision(6)
-                  << fastest_verified->pcg.solve_ms
-                  << " fastest_verified_iterations=" << fastest_verified->pcg.iterations
-                  << " fastest_verified_fine_A0_equivalent_total=" << total << '\n';
+                  << fastest->pcg.solve_ms
+                  << " fastest_verified_iterations=" << fastest->pcg.iterations
+                  << " fastest_verified_fine_A0_equivalent_total="
+                  << fastest->fine_equivalent_total << '\n';
     }
+    if (minimum_work != nullptr) {
+        std::cout << "minimum_equivalent_work_total="
+                  << minimum_work->fine_equivalent_total
+                  << " minimum_equivalent_work_iterations="
+                  << minimum_work->pcg.iterations << '\n';
+    }
+
+    if (anchor211 != nullptr && fastest != nullptr) {
+        const double time_ratio = fastest->pcg.solve_ms /
+            std::max(anchor211->pcg.solve_ms, 1.0e-300);
+        const double work_ratio = static_cast<double>(fastest->fine_equivalent_total) /
+            static_cast<double>(std::max<std::size_t>(anchor211->fine_equivalent_total, 1U));
+        std::cout << std::scientific << std::setprecision(9)
+                  << "fastest_time_ratio_vs_2x1x1=" << time_ratio
+                  << " fastest_work_ratio_vs_2x1x1=" << work_ratio << '\n';
+    }
+    if (anchor211 != nullptr && minimum_work != nullptr) {
+        const double work_ratio = static_cast<double>(minimum_work->fine_equivalent_total) /
+            static_cast<double>(std::max<std::size_t>(anchor211->fine_equivalent_total, 1U));
+        std::cout << "minimum_work_ratio_vs_2x1x1=" << std::scientific
+                  << std::setprecision(9) << work_ratio << '\n';
+    }
+
+    if (fastest != nullptr) print_residual_history("FINAL_TUNING_FASTEST_HISTORY", *fastest);
+    if (minimum_work != nullptr && minimum_work != fastest) {
+        print_residual_history("FINAL_TUNING_MINIMUM_WORK_HISTORY", *minimum_work);
+    }
+
     std::cout << "total_reference_ms=" << std::fixed << std::setprecision(6)
               << elapsed_ms(total_start, Clock::now()) << '\n';
 }
@@ -482,8 +434,7 @@ int main(int argc, char** argv) {
             ? static_cast<std::size_t>(std::stoull(argv[3])) : 12U;
         const std::size_t min_nodes = argc > 4
             ? static_cast<std::size_t>(std::stoull(argv[4])) : 4U;
-        run_level_smoothing_pcg_sweep(
-            max_iterations, tolerance, target_nodes, min_nodes);
+        run_final_smoothing_tuning(max_iterations, tolerance, target_nodes, min_nodes);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n'
