@@ -126,6 +126,8 @@ target_include_directories(gfss_recursive_sa_selective_pcg_bench PRIVATE
 
 add_executable(gfss_recursive_sa_smoothing_degree_pcg_sweep_bench
     ${CMAKE_CURRENT_LIST_DIR}/../recursive_sa_smoothing_degree_pcg_sweep_bench.cpp)
+target_compile_definitions(gfss_recursive_sa_smoothing_degree_pcg_sweep_bench PRIVATE
+    GFSS_RECURSIVE_SA_SELECTIVE_PCG_NO_MAIN=1)
 target_link_libraries(gfss_recursive_sa_smoothing_degree_pcg_sweep_bench PRIVATE
     gfss_multigrid_reference)
 target_include_directories(gfss_recursive_sa_smoothing_degree_pcg_sweep_bench PRIVATE
