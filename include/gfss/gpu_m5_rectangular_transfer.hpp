@@ -1,5 +1,14 @@
 #pragma once
 
+// The block-transfer benchmark reuses the scalar-transfer benchmark as a helper
+// implementation. recursive_sa_local_l2_helpers.inc temporarily defines and
+// then undefines `main`, so an outer `#define main ...` does not survive until
+// the scalar benchmark driver. Re-establish that rename only for the staging
+// block-transfer target after the recursive helper stack has finished including.
+#if defined(GFSS_M5_BLOCK_TRANSFER_BENCH) && !defined(main)
+#define main gfss_m5_scalar_transfer_reference_main
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
