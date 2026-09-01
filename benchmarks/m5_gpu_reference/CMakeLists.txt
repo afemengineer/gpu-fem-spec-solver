@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(gfss_m5_gpu_reference LANGUAGES CXX)
+project(gfss_m5_gpu_reference LANGUAGES CXX CUDA)
 
 # GPU productionization staging project. Keep the new M5 CUDA source isolated
 # from the root target graph until it has compiled and passed the FP64 oracle on
@@ -9,9 +9,11 @@ set(GFSS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GFSS_CPU_AVX2 ON CACHE BOOL "" FORCE)
 set(GFSS_CPU_FAST_FP ON CACHE BOOL "" FORCE)
 
-# The CXX shell benchmarks consume CUDA objects through gfss_cuda_operator, so
-# link the CUDA runtime explicitly. The standalone L1 CUDA TU below also uses
-# CUDA::cublas because it includes the persistent SA implementation directly.
+# This staging project now owns a standalone CUDA executable in addition to CXX
+# executables that consume CUDA objects through gfss_cuda_operator. Declaring
+# CUDA as a project language is required so CMake initializes the CUDA compiler
+# rules (for example CMAKE_CUDA_COMPILE_OBJECT and _CMAKE_CUDA_WHOLE_FLAG).
+# find_package(CUDAToolkit) alone only provides imported CUDA library targets.
 find_package(CUDAToolkit REQUIRED)
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../.. gfss_repo)
