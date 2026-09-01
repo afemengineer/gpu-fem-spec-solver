@@ -107,3 +107,8 @@ target_link_libraries(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
 target_include_directories(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+# The block benchmark includes the scalar benchmark only for its reusable CPU
+# assembly/oracle helpers. Mark this target so the transfer header restores the
+# scalar driver's renamed main after the recursive helper stack undefines it.
+target_compile_definitions(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
+    GFSS_M5_BLOCK_TRANSFER_BENCH=1)
