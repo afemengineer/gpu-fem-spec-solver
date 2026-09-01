@@ -9,10 +9,9 @@ set(GFSS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GFSS_CPU_AVX2 ON CACHE BOOL "" FORCE)
 set(GFSS_CPU_FAST_FP ON CACHE BOOL "" FORCE)
 
-# These benchmark executables are CXX targets that consume CUDA objects through
-# the static gfss_cuda_operator archive. Link the CUDA runtime explicitly;
-# otherwise MSVC uses link.exe without CMake's CUDA link-driver injection and
-# leaves cuda* / __cuda* runtime symbols unresolved.
+# The CXX shell benchmarks consume CUDA objects through gfss_cuda_operator, so
+# link the CUDA runtime explicitly. The standalone L1 CUDA TU below also uses
+# CUDA::cublas because it includes the persistent SA implementation directly.
 find_package(CUDAToolkit REQUIRED)
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../.. gfss_repo)
@@ -42,3 +41,20 @@ target_link_libraries(gfss_gpu_m5_fine_full_shell_bench PRIVATE
     CUDA::cudart)
 target_include_directories(gfss_gpu_m5_fine_full_shell_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include)
+
+# Standalone CUDA TU for the first persistent L1 production slice. It includes
+# gpu_smoothed_aggregation.cu directly so the experimental block smoother can
+# reuse the context's private device-resident A1=P0^T A0 P0 pipeline. Do not
+# link gfss_cuda_operator here or the included CUDA symbols would be duplicated.
+add_executable(gfss_gpu_m5_l1_block_smoother_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_block_smoother_bench.cu)
+target_link_libraries(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_l1_block_smoother_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
