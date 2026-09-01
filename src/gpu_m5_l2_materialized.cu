@@ -1,6 +1,7 @@
 #include "gfss/gpu_m5_l2_materialized.hpp"
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <algorithm>
 #include <limits>
@@ -14,6 +15,13 @@ namespace {
 void check_cuda_l2(cudaError_t status, const char* what) {
     if (status != cudaSuccess) {
         throw std::runtime_error(std::string(what) + ": " + cudaGetErrorString(status));
+    }
+}
+
+void check_cublas_l2(cublasStatus_t status, const char* what) {
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        throw std::runtime_error(std::string(what) + ": cuBLAS status=" +
+                                 std::to_string(static_cast<int>(status)));
     }
 }
 
@@ -159,6 +167,96 @@ GpuM5L2CsrResult benchmark_m5_l2_csr(
         if (stop) cudaEventDestroy(stop);
         if (d_rows) cudaFree(d_rows);
         if (d_cols) cudaFree(d_cols);
+        if (d_values) cudaFree(d_values);
+        if (d_x) cudaFree(d_x);
+        if (d_y) cudaFree(d_y);
+        throw;
+    }
+}
+
+GpuM5L2DenseResult benchmark_m5_l2_dense_symmetric(
+    const std::vector<float>& values_row_major,
+    std::size_t rows,
+    const std::vector<float>& x,
+    int repeats) {
+    if (rows == 0U || rows > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        x.size() != rows || values_row_major.size() != rows * rows) {
+        throw std::invalid_argument("M5 L2 dense matrix/vector size mismatch");
+    }
+    if (repeats <= 0) throw std::invalid_argument("M5 L2 dense repeats must be positive");
+
+    const std::size_t matrix_bytes = values_row_major.size() * sizeof(float);
+    const std::size_t vec_bytes = rows * sizeof(float);
+    float* d_values = nullptr;
+    float* d_x = nullptr;
+    float* d_y = nullptr;
+    cublasHandle_t handle{};
+    cudaEvent_t start{};
+    cudaEvent_t stop{};
+
+    try {
+        check_cuda_l2(cudaMalloc(reinterpret_cast<void**>(&d_values), matrix_bytes),
+                      "cudaMalloc(M5 L2 dense values)");
+        check_cuda_l2(cudaMalloc(reinterpret_cast<void**>(&d_x), vec_bytes),
+                      "cudaMalloc(M5 L2 dense x)");
+        check_cuda_l2(cudaMalloc(reinterpret_cast<void**>(&d_y), vec_bytes),
+                      "cudaMalloc(M5 L2 dense y)");
+        check_cuda_l2(cudaMemcpy(d_values, values_row_major.data(), matrix_bytes,
+                                 cudaMemcpyHostToDevice),
+                      "cudaMemcpy(M5 L2 dense values H2D)");
+        check_cuda_l2(cudaMemcpy(d_x, x.data(), vec_bytes, cudaMemcpyHostToDevice),
+                      "cudaMemcpy(M5 L2 dense x H2D)");
+        check_cublas_l2(cublasCreate(&handle), "cublasCreate(M5 L2 dense)");
+
+        const int n = static_cast<int>(rows);
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+        // values_row_major is the explicitly symmetrized A2. Interpreting the
+        // payload as column-major therefore exposes A2^T, which equals A2.
+        check_cublas_l2(cublasSgemv(handle, CUBLAS_OP_N, n, n,
+                                    &alpha, d_values, n, d_x, 1,
+                                    &beta, d_y, 1),
+                        "cublasSgemv(M5 L2 dense warmup)");
+        check_cuda_l2(cudaDeviceSynchronize(), "M5 L2 dense warmup sync");
+
+        check_cuda_l2(cudaEventCreate(&start), "cudaEventCreate(M5 L2 dense start)");
+        check_cuda_l2(cudaEventCreate(&stop), "cudaEventCreate(M5 L2 dense stop)");
+        std::vector<double> samples;
+        samples.reserve(static_cast<std::size_t>(repeats));
+        for (int repeat = 0; repeat < repeats; ++repeat) {
+            check_cuda_l2(cudaEventRecord(start), "cudaEventRecord(M5 L2 dense start)");
+            check_cublas_l2(cublasSgemv(handle, CUBLAS_OP_N, n, n,
+                                        &alpha, d_values, n, d_x, 1,
+                                        &beta, d_y, 1),
+                            "cublasSgemv(M5 L2 dense)");
+            check_cuda_l2(cudaEventRecord(stop), "cudaEventRecord(M5 L2 dense stop)");
+            check_cuda_l2(cudaEventSynchronize(stop), "cudaEventSynchronize(M5 L2 dense)");
+            float ms = 0.0f;
+            check_cuda_l2(cudaEventElapsedTime(&ms, start, stop),
+                          "cudaEventElapsedTime(M5 L2 dense)");
+            samples.push_back(static_cast<double>(ms));
+        }
+
+        GpuM5L2DenseResult result;
+        result.rows = rows;
+        result.y.resize(rows, 0.0f);
+        check_cuda_l2(cudaMemcpy(result.y.data(), d_y, vec_bytes, cudaMemcpyDeviceToHost),
+                      "cudaMemcpy(M5 L2 dense y D2H)");
+        result.timing.median_ms = median(samples);
+        result.timing.best_ms = *std::min_element(samples.begin(), samples.end());
+        result.device_bytes = matrix_bytes + 2U * vec_bytes;
+
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        cublasDestroy(handle);
+        cudaFree(d_values);
+        cudaFree(d_x);
+        cudaFree(d_y);
+        return result;
+    } catch (...) {
+        if (start) cudaEventDestroy(start);
+        if (stop) cudaEventDestroy(stop);
+        if (handle) cublasDestroy(handle);
         if (d_values) cudaFree(d_values);
         if (d_x) cudaFree(d_x);
         if (d_y) cudaFree(d_y);
