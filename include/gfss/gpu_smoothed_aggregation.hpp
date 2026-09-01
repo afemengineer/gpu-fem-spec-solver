@@ -4,6 +4,7 @@
 #include "gfss/structured_hex_mesh.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -52,6 +53,30 @@ struct GpuSmoothedAggregationL1BlockStepResult {
     double best_total_ms{0.0};
     std::size_t fine_operator_applies{0};
     std::size_t persistent_l1_bytes{0};
+};
+
+// Complete staged L1 V-cycle shell around an externally supplied L2 correction.
+// The exact frozen P1 is materialized in dual-order 6x6 block form: forward
+// row-major block values for P1 and transpose-ordered [q][r][entry] values for
+// P1^T. All shell vectors and transfers stay on device during the timed region.
+// Since every preconditioner application starts L1 from zero and nu1=1, the
+// mathematically redundant A1*0 in the degree-1 pre-smoother is elided exactly.
+struct GpuSmoothedAggregationL1ShellResult {
+    std::vector<float> final_x;
+    std::vector<float> l2_residual_padded;
+    double median_pre_smooth_ms{0.0};
+    double median_residual_ms{0.0};
+    double median_pack_ms{0.0};
+    double median_p1t_ms{0.0};
+    double median_p1_ms{0.0};
+    double median_correction_ms{0.0};
+    double median_post_smooth_ms{0.0};
+    double median_total_ms{0.0};
+    double best_total_ms{0.0};
+    std::size_t mathematical_a1_applies{0U};
+    std::size_t executed_a1_applies{0U};
+    bool zero_start_pre_a1_elided{false};
+    std::size_t persistent_l1_shell_bytes{0U};
 };
 
 // Persistent GPU implementation of
@@ -110,6 +135,25 @@ public:
         const std::vector<float>& inverse_blocks_6x6,
         double lambda_max,
         std::size_t transfer_smoothing_steps,
+        int repeats = 50);
+
+    // Complete L1 shell with nu1=1 and explicit dual-order block6 P1/P1^T.
+    // external_l2_correction_padded has 6*l2_nodes entries. Forward P1 uses
+    // block-row offsets/columns plus row-major 6x6 values. Restriction P1^T uses
+    // column offsets/source rows plus transpose-ordered [q][r][entry] values.
+    GpuSmoothedAggregationL1ShellResult l1_full_shell(
+        const std::vector<float>& rhs,
+        const std::vector<float>& inverse_blocks_6x6,
+        double lambda_max,
+        std::size_t a1_transfer_smoothing_steps,
+        std::size_t l2_nodes,
+        const std::vector<std::uint32_t>& p1_forward_row_offsets,
+        const std::vector<std::uint32_t>& p1_forward_column_indices,
+        const std::vector<float>& p1_forward_values_6x6,
+        const std::vector<std::uint32_t>& p1_transpose_column_offsets,
+        const std::vector<std::uint32_t>& p1_transpose_row_indices,
+        const std::vector<float>& p1_transpose_values_q_r_entry,
+        const std::vector<float>& external_l2_correction_padded,
         int repeats = 50);
 
     std::size_t fine_dofs() const noexcept;
