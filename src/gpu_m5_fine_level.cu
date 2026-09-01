@@ -1,6 +1,6 @@
-// M5 productionization stage 1: persistent GPU implementation of the fine
-// pre-smooth/residual/restriction half-cycle. Reuse the validated GoldSparse
-// stencil upload and matvec launchers without exporting another PCG entry point.
+// M5 productionization: persistent GPU implementation of the fine-level
+// symmetric V-cycle shell. Reuse the validated GoldSparse stencil upload and
+// matvec launchers without exporting another PCG entry point.
 #define solve_pcg_cuda_gold_sparse_x0 solve_pcg_cuda_gold_sparse_x0_m5_fine_internal_unused
 #include "gpu_pcg.cu"
 #undef solve_pcg_cuda_gold_sparse_x0
@@ -50,6 +50,50 @@ __device__ __forceinline__ void m5_aggregate_basis_values(
     bx = t[0] + z * t[4] - y * t[5];
     by = t[1] - z * t[3] + x * t[5];
     bz = t[2] + y * t[3] - x * t[4];
+}
+
+__global__ void m5_tentative_prolongation_kernel(
+    std::size_t nodes,
+    const std::uint32_t* __restrict__ aggregate_offsets,
+    const std::uint32_t* __restrict__ aggregate_nodes,
+    const DeviceAggregateM5* __restrict__ aggregates,
+    const float* __restrict__ coordinates,
+    const float* __restrict__ coarse,
+    float* __restrict__ fine) {
+    const std::uint32_t aggregate_id = blockIdx.x;
+    const DeviceAggregateM5* aggregate = aggregates + aggregate_id;
+    const std::uint32_t first = aggregate_offsets[aggregate_id];
+    const std::uint32_t last = aggregate_offsets[aggregate_id + 1U];
+
+    __shared__ float coarse_local[6];
+    if (threadIdx.x < aggregate->rank) {
+        coarse_local[threadIdx.x] = coarse[aggregate->coarse_offset + threadIdx.x];
+    }
+    __syncwarp();
+
+    for (std::uint32_t p = first + threadIdx.x; p < last; p += blockDim.x) {
+        const std::size_t node = aggregate_nodes[p];
+        const float x = (coordinates[node] - aggregate->centroid[0]) * aggregate->inv_scale;
+        const float y = (coordinates[nodes + node] - aggregate->centroid[1]) * aggregate->inv_scale;
+        const float z = (coordinates[2U * nodes + node] - aggregate->centroid[2]) * aggregate->inv_scale;
+
+        float ux = 0.0f;
+        float uy = 0.0f;
+        float uz = 0.0f;
+        for (std::uint32_t q = 0; q < aggregate->rank; ++q) {
+            float bx = 0.0f;
+            float by = 0.0f;
+            float bz = 0.0f;
+            m5_aggregate_basis_values(aggregate, x, y, z, q, bx, by, bz);
+            const float c = coarse_local[q];
+            ux = fmaf(bx, c, ux);
+            uy = fmaf(by, c, uy);
+            uz = fmaf(bz, c, uz);
+        }
+        fine[node] = ux;
+        fine[nodes + node] = uy;
+        fine[2U * nodes + node] = uz;
+    }
 }
 
 __global__ void m5_tentative_restriction_kernel(
@@ -215,6 +259,63 @@ __global__ void m5_transpose_update_kernel(
                                    work[2U * nodes + node]);
 }
 
+__global__ void m5_forward_transfer_update_kernel(
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    std::size_t nodes,
+    float omega,
+    const float* __restrict__ ax,
+    float* __restrict__ fine) {
+    const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const std::uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t k = blockIdx.z;
+    if (i > nx || j > ny || k > nz) return;
+
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::size_t node = static_cast<std::size_t>(i + sx * (j + sy * k));
+    if (i == 0U) {
+        fine[node] = 0.0f;
+        fine[nodes + node] = 0.0f;
+        fine[2U * nodes + node] = 0.0f;
+        return;
+    }
+    const int cls = axis_class_pcg(i, nx) +
+                    3 * (axis_class_pcg(j, ny) + 3 * axis_class_pcg(k, nz));
+    fine[node] = fmaf(-omega * kPcgInvDiag[cls][0], ax[node], fine[node]);
+    fine[nodes + node] = fmaf(-omega * kPcgInvDiag[cls][1],
+                              ax[nodes + node], fine[nodes + node]);
+    fine[2U * nodes + node] = fmaf(-omega * kPcgInvDiag[cls][2],
+                                   ax[2U * nodes + node], fine[2U * nodes + node]);
+}
+
+__global__ void m5_add_correction_kernel(
+    std::uint32_t nx,
+    std::uint32_t ny,
+    std::uint32_t nz,
+    std::size_t nodes,
+    const float* __restrict__ correction,
+    float* __restrict__ x) {
+    const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const std::uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    const std::uint32_t k = blockIdx.z;
+    if (i > nx || j > ny || k > nz) return;
+
+    const std::uint32_t sx = nx + 1U;
+    const std::uint32_t sy = ny + 1U;
+    const std::size_t node = static_cast<std::size_t>(i + sx * (j + sy * k));
+    if (i == 0U) {
+        x[node] = 0.0f;
+        x[nodes + node] = 0.0f;
+        x[2U * nodes + node] = 0.0f;
+        return;
+    }
+    x[node] += correction[node];
+    x[nodes + node] += correction[nodes + node];
+    x[2U * nodes + node] += correction[2U * nodes + node];
+}
+
 void m5_launch_vector_kernel_geometry(const StructuredHexMesh& mesh,
                                        dim3& grid,
                                        dim3& block,
@@ -276,6 +377,54 @@ void m5_launch_transpose_update(const StructuredHexMesh& mesh,
     check_cuda_pcg(cudaGetLastError(), "M5 transpose update launch");
 }
 
+void m5_launch_forward_transfer_update(const StructuredHexMesh& mesh,
+                                       int block_y,
+                                       std::size_t nodes,
+                                       float omega,
+                                       const float* ax,
+                                       float* fine) {
+    dim3 grid, block;
+    m5_launch_vector_kernel_geometry(mesh, grid, block, block_y);
+    m5_forward_transfer_update_kernel<<<grid, block>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, omega, ax, fine);
+    check_cuda_pcg(cudaGetLastError(), "M5 forward transfer update launch");
+}
+
+void m5_launch_add_correction(const StructuredHexMesh& mesh,
+                              int block_y,
+                              std::size_t nodes,
+                              const float* correction,
+                              float* x) {
+    dim3 grid, block;
+    m5_launch_vector_kernel_geometry(mesh, grid, block, block_y);
+    m5_add_correction_kernel<<<grid, block>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, correction, x);
+    check_cuda_pcg(cudaGetLastError(), "M5 fine correction add launch");
+}
+
+void m5_launch_p0(const StructuredHexMesh& mesh,
+                   std::size_t nodes,
+                   std::uint32_t aggregate_count,
+                   const std::uint32_t* aggregate_offsets,
+                   const std::uint32_t* aggregate_nodes,
+                   const DeviceAggregateM5* aggregates,
+                   const float* coordinates,
+                   const float* coarse,
+                   float* fine) {
+    constexpr unsigned int threads = 32U;
+    m5_tentative_prolongation_kernel<<<aggregate_count, threads>>>(
+        nodes, aggregate_offsets, aggregate_nodes, aggregates,
+        coordinates, coarse, fine);
+    check_cuda_pcg(cudaGetLastError(), "M5 tentative P0 launch");
+
+    const std::uint32_t face_nodes = (mesh.ny + 1U) * (mesh.nz + 1U);
+    constexpr unsigned int clamp_threads = 256U;
+    const unsigned int clamp_blocks = (face_nodes + clamp_threads - 1U) / clamp_threads;
+    zero_x0_face_pcg_kernel<<<clamp_blocks, clamp_threads>>>(
+        mesh.nx, mesh.ny, mesh.nz, nodes, fine);
+    check_cuda_pcg(cudaGetLastError(), "M5 tentative P0 clamp launch");
+}
+
 void m5_launch_p0t(std::size_t nodes,
                     std::uint32_t aggregate_count,
                     const std::uint32_t* aggregate_offsets,
@@ -312,9 +461,14 @@ GpuM5FinePreRestrictTiming m5_summarize_median(
         p0t.push_back(s.p0t_ms);
         total.push_back(s.total_ms);
     }
-    return {m5_median(std::move(zero)), m5_median(std::move(smooth)),
-            m5_median(std::move(residual)), m5_median(std::move(transpose)),
-            m5_median(std::move(p0t)), m5_median(std::move(total))};
+    GpuM5FinePreRestrictTiming out;
+    out.zero_ms = m5_median(std::move(zero));
+    out.pre_smooth_ms = m5_median(std::move(smooth));
+    out.residual_ms = m5_median(std::move(residual));
+    out.transfer_transpose_ms = m5_median(std::move(transpose));
+    out.p0t_ms = m5_median(std::move(p0t));
+    out.total_ms = m5_median(std::move(total));
+    return out;
 }
 
 GpuM5FinePreRestrictTiming m5_summarize_best(
@@ -329,6 +483,61 @@ GpuM5FinePreRestrictTiming m5_summarize_best(
         out.residual_ms = std::min(out.residual_ms, s.residual_ms);
         out.transfer_transpose_ms = std::min(out.transfer_transpose_ms, s.transfer_transpose_ms);
         out.p0t_ms = std::min(out.p0t_ms, s.p0t_ms);
+        out.total_ms = std::min(out.total_ms, s.total_ms);
+    }
+    return out;
+}
+
+GpuM5FineFullShellTiming m5_summarize_full_median(
+    const std::vector<GpuM5FineFullShellTiming>& samples) {
+    std::vector<double> zero, pre, residual, transpose, p0t, p0, forward, correction, post, total;
+    zero.reserve(samples.size()); pre.reserve(samples.size()); residual.reserve(samples.size());
+    transpose.reserve(samples.size()); p0t.reserve(samples.size()); p0.reserve(samples.size());
+    forward.reserve(samples.size()); correction.reserve(samples.size()); post.reserve(samples.size());
+    total.reserve(samples.size());
+    for (const auto& s : samples) {
+        zero.push_back(s.zero_ms);
+        pre.push_back(s.pre_smooth_ms);
+        residual.push_back(s.residual_ms);
+        transpose.push_back(s.transfer_transpose_ms);
+        p0t.push_back(s.p0t_ms);
+        p0.push_back(s.p0_ms);
+        forward.push_back(s.transfer_forward_ms);
+        correction.push_back(s.correction_ms);
+        post.push_back(s.post_smooth_ms);
+        total.push_back(s.total_ms);
+    }
+    GpuM5FineFullShellTiming out;
+    out.zero_ms = m5_median(std::move(zero));
+    out.pre_smooth_ms = m5_median(std::move(pre));
+    out.residual_ms = m5_median(std::move(residual));
+    out.transfer_transpose_ms = m5_median(std::move(transpose));
+    out.p0t_ms = m5_median(std::move(p0t));
+    out.p0_ms = m5_median(std::move(p0));
+    out.transfer_forward_ms = m5_median(std::move(forward));
+    out.correction_ms = m5_median(std::move(correction));
+    out.post_smooth_ms = m5_median(std::move(post));
+    out.total_ms = m5_median(std::move(total));
+    return out;
+}
+
+GpuM5FineFullShellTiming m5_summarize_full_best(
+    const std::vector<GpuM5FineFullShellTiming>& samples) {
+    GpuM5FineFullShellTiming out;
+    out.zero_ms = out.pre_smooth_ms = out.residual_ms =
+        out.transfer_transpose_ms = out.p0t_ms = out.p0_ms =
+        out.transfer_forward_ms = out.correction_ms = out.post_smooth_ms =
+        out.total_ms = std::numeric_limits<double>::infinity();
+    for (const auto& s : samples) {
+        out.zero_ms = std::min(out.zero_ms, s.zero_ms);
+        out.pre_smooth_ms = std::min(out.pre_smooth_ms, s.pre_smooth_ms);
+        out.residual_ms = std::min(out.residual_ms, s.residual_ms);
+        out.transfer_transpose_ms = std::min(out.transfer_transpose_ms, s.transfer_transpose_ms);
+        out.p0t_ms = std::min(out.p0t_ms, s.p0t_ms);
+        out.p0_ms = std::min(out.p0_ms, s.p0_ms);
+        out.transfer_forward_ms = std::min(out.transfer_forward_ms, s.transfer_forward_ms);
+        out.correction_ms = std::min(out.correction_ms, s.correction_ms);
+        out.post_smooth_ms = std::min(out.post_smooth_ms, s.post_smooth_ms);
         out.total_ms = std::min(out.total_ms, s.total_ms);
     }
     return out;
@@ -361,7 +570,9 @@ struct GpuM5FineLevelContext::Impl {
     float* d_x{nullptr};
     float* d_work0{nullptr};
     float* d_work1{nullptr};
+    float* d_work2{nullptr};
     float* d_coarse{nullptr};
+    float* d_coarse_correction{nullptr};
 
     std::size_t aggregation_metadata_bytes{0U};
     std::size_t model_coordinate_bytes{0U};
@@ -460,9 +671,10 @@ struct GpuM5FineLevelContext::Impl {
         const std::size_t aggregate_bytes = host_aggregates.size() * sizeof(DeviceAggregateM5);
         aggregation_metadata_bytes = offset_bytes + node_bytes + aggregate_bytes;
         model_coordinate_bytes = host_coordinates.size() * sizeof(float);
-        fine_vector_bytes = 4U * ndof * sizeof(float);
-        coarse_vector_bytes = coarse_dof_count * sizeof(float);
+        fine_vector_bytes = 5U * ndof * sizeof(float);
+        coarse_vector_bytes = 2U * coarse_dof_count * sizeof(float);
         const std::size_t one_fine_bytes = ndof * sizeof(float);
+        const std::size_t one_coarse_bytes = coarse_dof_count * sizeof(float);
 
         try {
             upload_pcg_stencil(mesh, material);
@@ -482,8 +694,12 @@ struct GpuM5FineLevelContext::Impl {
                            "cudaMalloc(M5 work0)");
             check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_work1), one_fine_bytes),
                            "cudaMalloc(M5 work1)");
-            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_coarse), coarse_vector_bytes),
+            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_work2), one_fine_bytes),
+                           "cudaMalloc(M5 work2)");
+            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_coarse), one_coarse_bytes),
                            "cudaMalloc(M5 coarse residual)");
+            check_cuda_pcg(cudaMalloc(reinterpret_cast<void**>(&d_coarse_correction), one_coarse_bytes),
+                           "cudaMalloc(M5 coarse correction)");
 
             check_cuda_pcg(cudaMemcpy(d_aggregate_offsets, host_offsets.data(), offset_bytes,
                                       cudaMemcpyHostToDevice),
@@ -514,12 +730,15 @@ struct GpuM5FineLevelContext::Impl {
         if (d_x) cudaFree(d_x);
         if (d_work0) cudaFree(d_work0);
         if (d_work1) cudaFree(d_work1);
+        if (d_work2) cudaFree(d_work2);
         if (d_coarse) cudaFree(d_coarse);
+        if (d_coarse_correction) cudaFree(d_coarse_correction);
         d_aggregate_offsets = nullptr;
         d_aggregate_nodes = nullptr;
         d_aggregates = nullptr;
         d_coordinates = nullptr;
-        d_rhs = d_x = d_work0 = d_work1 = d_coarse = nullptr;
+        d_rhs = d_x = d_work0 = d_work1 = d_work2 = nullptr;
+        d_coarse = d_coarse_correction = nullptr;
     }
 
     std::vector<float> chebyshev_weights(std::size_t degree) const {
@@ -539,9 +758,9 @@ struct GpuM5FineLevelContext::Impl {
         return weights;
     }
 
-    void run_once(const std::vector<float>& weights,
-                  std::size_t transfer_steps,
-                  const std::array<cudaEvent_t, 6>* events) {
+    void run_pre_once(const std::vector<float>& weights,
+                      std::size_t transfer_steps,
+                      const std::array<cudaEvent_t, 6>* events) {
         const std::size_t bytes = ndof * sizeof(float);
         if (events) check_cuda_pcg(cudaEventRecord((*events)[0]), "M5 record start");
         check_cuda_pcg(cudaMemsetAsync(d_x, 0, bytes), "cudaMemsetAsync(M5 x=0)");
@@ -559,15 +778,65 @@ struct GpuM5FineLevelContext::Impl {
 
         const float omega = static_cast<float>(transfer_omega_value);
         for (std::size_t step = 0; step < transfer_steps; ++step) {
-            m5_launch_inverse_scale(mesh, block_y, nodes, d_work0, d_x);
-            launch_pcg_matvec(mesh, block_y, nodes, d_x, d_work1);
-            m5_launch_transpose_update(mesh, block_y, nodes, omega, d_work1, d_work0);
+            m5_launch_inverse_scale(mesh, block_y, nodes, d_work0, d_work1);
+            launch_pcg_matvec(mesh, block_y, nodes, d_work1, d_work2);
+            m5_launch_transpose_update(mesh, block_y, nodes, omega, d_work2, d_work0);
         }
         if (events) check_cuda_pcg(cudaEventRecord((*events)[4]), "M5 record transpose transfer");
 
         m5_launch_p0t(nodes, aggregate_count, d_aggregate_offsets, d_aggregate_nodes,
                        d_aggregates, d_coordinates, d_work0, d_coarse);
         if (events) check_cuda_pcg(cudaEventRecord((*events)[5]), "M5 record P0T");
+    }
+
+    void run_full_shell_once(const std::vector<float>& weights,
+                             std::size_t transfer_steps,
+                             const std::array<cudaEvent_t, 10>* events) {
+        const std::size_t bytes = ndof * sizeof(float);
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[0]), "M5 full record start");
+        check_cuda_pcg(cudaMemsetAsync(d_x, 0, bytes), "cudaMemsetAsync(M5 full x=0)");
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[1]), "M5 full record zero");
+
+        for (const float weight : weights) {
+            launch_pcg_matvec(mesh, block_y, nodes, d_x, d_work0);
+            m5_launch_chebyshev_update(mesh, block_y, nodes, weight, d_rhs, d_work0, d_x);
+        }
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[2]), "M5 full record pre-smooth");
+
+        launch_pcg_matvec(mesh, block_y, nodes, d_x, d_work0);
+        m5_launch_residual(mesh, block_y, nodes, d_rhs, d_work0);
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[3]), "M5 full record residual");
+
+        const float omega = static_cast<float>(transfer_omega_value);
+        for (std::size_t step = 0; step < transfer_steps; ++step) {
+            m5_launch_inverse_scale(mesh, block_y, nodes, d_work0, d_work1);
+            launch_pcg_matvec(mesh, block_y, nodes, d_work1, d_work2);
+            m5_launch_transpose_update(mesh, block_y, nodes, omega, d_work2, d_work0);
+        }
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[4]), "M5 full record transpose");
+
+        m5_launch_p0t(nodes, aggregate_count, d_aggregate_offsets, d_aggregate_nodes,
+                       d_aggregates, d_coordinates, d_work0, d_coarse);
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[5]), "M5 full record P0T");
+
+        m5_launch_p0(mesh, nodes, aggregate_count, d_aggregate_offsets, d_aggregate_nodes,
+                      d_aggregates, d_coordinates, d_coarse_correction, d_work0);
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[6]), "M5 full record P0");
+
+        for (std::size_t step = 0; step < transfer_steps; ++step) {
+            launch_pcg_matvec(mesh, block_y, nodes, d_work0, d_work1);
+            m5_launch_forward_transfer_update(mesh, block_y, nodes, omega, d_work1, d_work0);
+        }
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[7]), "M5 full record forward transfer");
+
+        m5_launch_add_correction(mesh, block_y, nodes, d_work0, d_x);
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[8]), "M5 full record correction");
+
+        for (const float weight : weights) {
+            launch_pcg_matvec(mesh, block_y, nodes, d_x, d_work0);
+            m5_launch_chebyshev_update(mesh, block_y, nodes, weight, d_rhs, d_work0, d_x);
+        }
+        if (events) check_cuda_pcg(cudaEventRecord((*events)[9]), "M5 full record post-smooth");
     }
 };
 
@@ -615,7 +884,7 @@ GpuM5FinePreRestrictResult GpuM5FineLevelContext::pre_smooth_restrict(
                    "cudaMemcpy(M5 RHS H2D)");
 
     const auto weights = impl_->chebyshev_weights(smoother_degree);
-    impl_->run_once(weights, transfer_smoothing_steps, nullptr);
+    impl_->run_pre_once(weights, transfer_smoothing_steps, nullptr);
     check_cuda_pcg(cudaDeviceSynchronize(), "cudaDeviceSynchronize(M5 warmup)");
 
     std::array<cudaEvent_t, 6> events{};
@@ -626,7 +895,7 @@ GpuM5FinePreRestrictResult GpuM5FineLevelContext::pre_smooth_restrict(
         std::vector<GpuM5FinePreRestrictTiming> samples;
         samples.reserve(static_cast<std::size_t>(repeats));
         for (int repeat = 0; repeat < repeats; ++repeat) {
-            impl_->run_once(weights, transfer_smoothing_steps, &events);
+            impl_->run_pre_once(weights, transfer_smoothing_steps, &events);
             check_cuda_pcg(cudaEventSynchronize(events[5]), "cudaEventSynchronize(M5 fine slice)");
             GpuM5FinePreRestrictTiming sample;
             sample.zero_ms = static_cast<double>(m5_elapsed(events[0], events[1]));
@@ -649,6 +918,113 @@ GpuM5FinePreRestrictResult GpuM5FineLevelContext::pre_smooth_restrict(
         result.smoother_degree = smoother_degree;
         result.transfer_smoothing_steps = transfer_smoothing_steps;
         result.fine_operator_applies = smoother_degree + 1U + transfer_smoothing_steps;
+        result.fine_vector_bytes = impl_->fine_vector_bytes;
+        result.coarse_vector_bytes = impl_->coarse_vector_bytes;
+        result.aggregation_metadata_bytes = impl_->aggregation_metadata_bytes;
+        result.model_coordinate_bytes = impl_->model_coordinate_bytes;
+        result.device_bytes_total = impl_->fine_vector_bytes + impl_->coarse_vector_bytes +
+                                    impl_->aggregation_metadata_bytes +
+                                    impl_->model_coordinate_bytes;
+        for (auto event : events) cudaEventDestroy(event);
+        return result;
+    } catch (...) {
+        for (auto event : events) {
+            if (event) cudaEventDestroy(event);
+        }
+        throw;
+    }
+}
+
+GpuM5FineFullShellResult GpuM5FineLevelContext::full_shell(
+    const std::vector<float>& rhs_aos,
+    const std::vector<float>& coarse_correction,
+    std::size_t smoother_degree,
+    std::size_t transfer_smoothing_steps,
+    int repeats) {
+    if (!impl_) throw std::runtime_error("M5 GPU fine-level context is empty");
+    if (rhs_aos.size() != impl_->ndof) {
+        throw std::invalid_argument("M5 GPU full shell RHS size mismatch");
+    }
+    if (coarse_correction.size() != impl_->coarse_dof_count) {
+        throw std::invalid_argument("M5 GPU full shell coarse correction size mismatch");
+    }
+    if (smoother_degree == 0U || smoother_degree > 32U) {
+        throw std::invalid_argument("M5 GPU full shell smoother degree must be in [1,32]");
+    }
+    if (transfer_smoothing_steps > 8U) {
+        throw std::invalid_argument("M5 GPU full shell transfer smoothing limited to 8");
+    }
+    if (repeats <= 0) {
+        throw std::invalid_argument("M5 GPU full shell repeats must be positive");
+    }
+
+    std::vector<float> rhs_soa(impl_->ndof, 0.0f);
+    for (std::size_t node = 0; node < impl_->nodes; ++node) {
+        rhs_soa[node] = rhs_aos[3U * node + 0U];
+        rhs_soa[impl_->nodes + node] = rhs_aos[3U * node + 1U];
+        rhs_soa[2U * impl_->nodes + node] = rhs_aos[3U * node + 2U];
+    }
+    check_cuda_pcg(cudaMemcpy(impl_->d_rhs, rhs_soa.data(), impl_->ndof * sizeof(float),
+                              cudaMemcpyHostToDevice),
+                   "cudaMemcpy(M5 full RHS H2D)");
+    check_cuda_pcg(cudaMemcpy(impl_->d_coarse_correction, coarse_correction.data(),
+                              impl_->coarse_dof_count * sizeof(float),
+                              cudaMemcpyHostToDevice),
+                   "cudaMemcpy(M5 full coarse correction H2D)");
+
+    const auto weights = impl_->chebyshev_weights(smoother_degree);
+    impl_->run_full_shell_once(weights, transfer_smoothing_steps, nullptr);
+    check_cuda_pcg(cudaDeviceSynchronize(), "cudaDeviceSynchronize(M5 full warmup)");
+
+    std::array<cudaEvent_t, 10> events{};
+    try {
+        for (auto& event : events) {
+            check_cuda_pcg(cudaEventCreate(&event), "cudaEventCreate(M5 full shell)");
+        }
+        std::vector<GpuM5FineFullShellTiming> samples;
+        samples.reserve(static_cast<std::size_t>(repeats));
+        for (int repeat = 0; repeat < repeats; ++repeat) {
+            impl_->run_full_shell_once(weights, transfer_smoothing_steps, &events);
+            check_cuda_pcg(cudaEventSynchronize(events[9]), "cudaEventSynchronize(M5 full shell)");
+            GpuM5FineFullShellTiming sample;
+            sample.zero_ms = static_cast<double>(m5_elapsed(events[0], events[1]));
+            sample.pre_smooth_ms = static_cast<double>(m5_elapsed(events[1], events[2]));
+            sample.residual_ms = static_cast<double>(m5_elapsed(events[2], events[3]));
+            sample.transfer_transpose_ms = static_cast<double>(m5_elapsed(events[3], events[4]));
+            sample.p0t_ms = static_cast<double>(m5_elapsed(events[4], events[5]));
+            sample.p0_ms = static_cast<double>(m5_elapsed(events[5], events[6]));
+            sample.transfer_forward_ms = static_cast<double>(m5_elapsed(events[6], events[7]));
+            sample.correction_ms = static_cast<double>(m5_elapsed(events[7], events[8]));
+            sample.post_smooth_ms = static_cast<double>(m5_elapsed(events[8], events[9]));
+            sample.total_ms = static_cast<double>(m5_elapsed(events[0], events[9]));
+            samples.push_back(sample);
+        }
+
+        GpuM5FineFullShellResult result;
+        result.coarse_residual.resize(impl_->coarse_dof_count, 0.0f);
+        check_cuda_pcg(cudaMemcpy(result.coarse_residual.data(), impl_->d_coarse,
+                                  impl_->coarse_dof_count * sizeof(float),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy(M5 full coarse residual D2H)");
+
+        std::vector<float> fine_soa(impl_->ndof, 0.0f);
+        check_cuda_pcg(cudaMemcpy(fine_soa.data(), impl_->d_x,
+                                  impl_->ndof * sizeof(float),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy(M5 full fine correction D2H)");
+        result.fine_correction_aos.resize(impl_->ndof, 0.0f);
+        for (std::size_t node = 0; node < impl_->nodes; ++node) {
+            result.fine_correction_aos[3U * node + 0U] = fine_soa[node];
+            result.fine_correction_aos[3U * node + 1U] = fine_soa[impl_->nodes + node];
+            result.fine_correction_aos[3U * node + 2U] = fine_soa[2U * impl_->nodes + node];
+        }
+
+        result.median_timing = m5_summarize_full_median(samples);
+        result.best_timing = m5_summarize_full_best(samples);
+        result.smoother_degree = smoother_degree;
+        result.transfer_smoothing_steps = transfer_smoothing_steps;
+        result.fine_operator_applies = 2U * smoother_degree + 1U +
+                                       2U * transfer_smoothing_steps;
         result.fine_vector_bytes = impl_->fine_vector_bytes;
         result.coarse_vector_bytes = impl_->coarse_vector_bytes;
         result.aggregation_metadata_bytes = impl_->aggregation_metadata_bytes;
