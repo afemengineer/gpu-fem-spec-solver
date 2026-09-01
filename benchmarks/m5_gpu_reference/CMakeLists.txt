@@ -130,3 +130,19 @@ target_include_directories(gfss_gpu_m5_complete_vcycle_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_complete_vcycle_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# First solver-level staging target. The CUDA TU includes the complete V-cycle
+# implementation and keeps PCG vectors, reductions and all preconditioner state
+# on device for a fixed iteration count. Only the final solution is returned to
+# the host for an independent FP64 true-residual verification.
+add_executable(gfss_gpu_m5_vcycle_pcg_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_impl.cu)
+target_link_libraries(gfss_gpu_m5_vcycle_pcg_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_vcycle_pcg_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_vcycle_pcg_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
