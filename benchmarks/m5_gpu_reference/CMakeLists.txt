@@ -30,7 +30,8 @@ target_sources(gfss_cuda_operator PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_fine_level.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_l2_materialized.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_rectangular_csr_only.cu
-    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transfer_optimized.cu)
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transfer_optimized.cu
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transpose_soa.cu)
 
 add_executable(gfss_gpu_m5_fine_pre_restrict_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_fine_pre_restrict_bench.cpp)
@@ -115,3 +116,19 @@ target_include_directories(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
 # scalar driver's renamed main after the recursive helper stack undefines it.
 target_compile_definitions(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
     GFSS_M5_BLOCK_TRANSFER_BENCH=1)
+
+# Close the remaining block6 transpose gap without falling back to scalar CSR.
+# The forward block payload is retained, but a second 6x6 payload is packed in
+# transpose/component order [q][r][incident block] so warp coefficient loads are
+# coalesced. This target compares that transpose directly against scalar P1^T
+# and reports the full dual-block production memory footprint.
+add_executable(gfss_gpu_m5_l1_l2_block_transpose_soa_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_l2_block_transpose_soa_bench.cpp)
+target_link_libraries(gfss_gpu_m5_l1_l2_block_transpose_soa_bench PRIVATE
+    gfss_cuda_operator
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l1_l2_block_transpose_soa_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
