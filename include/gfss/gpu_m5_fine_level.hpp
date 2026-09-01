@@ -90,6 +90,24 @@ struct GpuM5CompleteVcycleResult {
     std::size_t bottom_dofs{0};
 };
 
+// Fixed-iteration staging result for a fully device-resident left-preconditioned
+// CG solve. The complete 5x1x1 V-cycle is applied as M^-1 without H2D/D2H or
+// host scalar reductions inside a timed solve. A final host-facing solution is
+// returned for the independent FP64 true-residual oracle.
+struct GpuM5VcyclePcgResult {
+    std::vector<float> solution_aos;
+    double median_solve_ms{0.0};
+    double best_solve_ms{0.0};
+    double recursive_relative_residual{0.0};
+    std::size_t iterations{0};
+    std::size_t preconditioner_applications{0};
+    std::size_t pcg_operator_applications{0};
+    std::size_t vcycle_l0_operator_applies{0};
+    std::size_t total_l0_operator_applies{0};
+    std::size_t device_bytes_total{0};
+    bool breakdown{false};
+};
+
 // Persistent M5 fine-level execution context.
 //
 // The validated upper-half operation is
@@ -166,6 +184,32 @@ public:
         std::size_t l3_dofs,
         const std::vector<float>& l3_cholesky_lower_row_major,
         int repeats = 50);
+
+    // Fixed-iteration fully device-resident PCG staging path. The number of
+    // iterations is intentionally fixed so no host convergence check or scalar
+    // round trip contaminates the timed inner solve. The caller performs the
+    // authoritative FP64 true-residual verification on the returned solution.
+    GpuM5VcyclePcgResult solve_pcg_vcycle_5x1x1_fixed(
+        const std::vector<float>& rhs_aos,
+        std::size_t iterations,
+        std::size_t l0_smoother_degree,
+        std::size_t m0,
+        const std::vector<float>& l1_inverse_blocks_6x6,
+        double lambda1,
+        std::size_t l2_nodes,
+        const std::vector<std::uint32_t>& p1_forward_row_offsets,
+        const std::vector<std::uint32_t>& p1_forward_column_indices,
+        const std::vector<float>& p1_forward_values_6x6,
+        const std::vector<std::uint32_t>& p1_transpose_column_offsets,
+        const std::vector<std::uint32_t>& p1_transpose_row_indices,
+        const std::vector<float>& p1_transpose_values_q_r_entry,
+        const std::vector<float>& a2_dense_row_major,
+        const std::vector<float>& l2_inverse_blocks_6x6,
+        double lambda2,
+        const std::vector<float>& p2_dense_row_major,
+        std::size_t l3_dofs,
+        const std::vector<float>& l3_cholesky_lower_row_major,
+        int repeats = 20);
 
     std::size_t fine_dofs() const noexcept;
     std::size_t coarse_dofs() const noexcept;
