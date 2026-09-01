@@ -22,9 +22,11 @@ if(NOT TARGET gfss_cuda_operator)
     message(FATAL_ERROR "M5 GPU reference requires a working CUDA compiler")
 endif()
 
-# Stage the new persistent fine-level context only in this reference build.
+# Stage the persistent M5 GPU productionization sources only in this reference
+# build until each slice has compiled and passed its independent FP64 oracle.
 target_sources(gfss_cuda_operator PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_fine_level.cu)
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_fine_level.cu
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_l2_materialized.cu)
 
 add_executable(gfss_gpu_m5_fine_pre_restrict_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_fine_pre_restrict_bench.cpp)
@@ -60,3 +62,18 @@ target_include_directories(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_l1_block_smoother_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# Final-hierarchy L2 representation decision. CPU setup reconstructs the exact
+# localized A2 used by the frozen reference hierarchy and compresses structural
+# zeros to FP32 CSR. The GPU side benchmarks that CSR against a strict lower
+# bound for the fully factorized m1=2 representation.
+add_executable(gfss_gpu_m5_l2_representation_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l2_representation_bench.cpp)
+target_link_libraries(gfss_gpu_m5_l2_representation_bench PRIVATE
+    gfss_cuda_operator
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l2_representation_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
