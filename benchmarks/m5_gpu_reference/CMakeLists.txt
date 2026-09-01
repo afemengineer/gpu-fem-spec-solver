@@ -24,10 +24,13 @@ endif()
 
 # Stage the persistent M5 GPU productionization sources only in this reference
 # build until each slice has compiled and passed its independent FP64 oracle.
+# The rectangular transfer experiment is split into scalar CSR and optimized
+# block6 implementations so the latter can evolve without duplicating symbols.
 target_sources(gfss_cuda_operator PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_fine_level.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_l2_materialized.cu
-    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_rectangular_transfer.cu)
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_rectangular_csr_only.cu
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transfer_optimized.cu)
 
 add_executable(gfss_gpu_m5_fine_pre_restrict_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_fine_pre_restrict_bench.cpp)
