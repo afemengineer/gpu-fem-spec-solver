@@ -1,10 +1,10 @@
 // M5 GPU productionization stage 3: decide whether L2 should remain fully
-// factorized or be selectively materialized. Build the exact frozen-hierarchy
-// A2=P1^T A1 P1 from localized supports, compress structural zeros into scalar
-// CSR, audit it against the nested FP64 operator, then benchmark persistent FP32
-// CSR SpMV on GPU. The factorized comparator is a strict lower bound: with
-// m1=2, any A2 action requires at least 2*m1+1 = 5 complete A1 actions before
-// counting P1/P1^T and block-metric vector work.
+// factorized or be selectively materialized, then choose the materialized
+// storage format. Build the exact frozen-hierarchy A2=P1^T A1 P1 from localized
+// supports, audit it against the nested FP64 operator, and benchmark both
+// structural FP32 CSR and dense FP32 GEMV on GPU. The factorized comparator is
+// a strict lower bound: with m1=2, any A2 action requires at least
+// 2*m1+1 = 5 complete A1 actions before counting P1/P1^T and block-metric work.
 #include "recursive_sa_local_l2_helpers.inc"
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
 #include "gfss/gpu_m5_l2_materialized.hpp"
@@ -265,7 +265,12 @@ int main(int argc, char** argv) {
         const auto probe_f = to_float(probe);
         const auto gpu_csr = gfss::benchmark_m5_l2_csr(
             a2.row_offsets, a2.column_indices, a2.values_fp32, probe_f, repeats);
-        const double gpu_vs_nested = relative_error(gpu_csr.y, nested);
+        const double gpu_csr_vs_nested = relative_error(gpu_csr.y, nested);
+
+        const auto dense_fp32 = to_float(a2.dense_fp64);
+        const auto gpu_dense = gfss::benchmark_m5_l2_dense_symmetric(
+            dense_fp32, a2.n, probe_f, repeats);
+        const double gpu_dense_vs_nested = relative_error(gpu_dense.y, nested);
 
         // Measure A1 on the same run/GPU. This context is the validated
         // factorized P0^T A0 P0 path used by the L1 stage.
@@ -275,8 +280,13 @@ int main(int argc, char** argv) {
         const auto a1_timing = a1_gpu.apply(to_float(l1_probe), m0, repeats);
         const double factorized_a2_lower_bound_ms =
             static_cast<double>(2U * m1 + 1U) * a1_timing.median_timing.total_ms;
-        const double lower_bound_speedup = gpu_csr.timing.median_ms > 0.0
+
+        const double csr_speedup_vs_factorized = gpu_csr.timing.median_ms > 0.0
             ? factorized_a2_lower_bound_ms / gpu_csr.timing.median_ms : 0.0;
+        const double dense_speedup_vs_factorized = gpu_dense.timing.median_ms > 0.0
+            ? factorized_a2_lower_bound_ms / gpu_dense.timing.median_ms : 0.0;
+        const double dense_speedup_vs_csr = gpu_dense.timing.median_ms > 0.0
+            ? gpu_csr.timing.median_ms / gpu_dense.timing.median_ms : 0.0;
 
         const std::size_t dense_fp32_bytes = a2.n * a2.n * sizeof(float);
         const double density = a2.n > 0U
@@ -285,14 +295,21 @@ int main(int argc, char** argv) {
         const double nnz_per_row = a2.n > 0U
             ? static_cast<double>(a2.values_fp32.size()) / static_cast<double>(a2.n) : 0.0;
         const std::size_t matrix_csr_bytes = a2.matrix_bytes_fp32();
-        const bool oracle_ok = materialized_vs_nested <= 1.0e-10 && gpu_vs_nested <= 1.0e-4;
-        const bool speed_ok = gpu_csr.timing.median_ms < factorized_a2_lower_bound_ms;
+
+        const bool oracle_ok = materialized_vs_nested <= 1.0e-10 &&
+            gpu_csr_vs_nested <= 1.0e-4 && gpu_dense_vs_nested <= 1.0e-4;
+        const bool csr_speed_ok = gpu_csr.timing.median_ms < factorized_a2_lower_bound_ms;
+        const bool dense_speed_ok = gpu_dense.timing.median_ms < factorized_a2_lower_bound_ms;
+        const bool dense_less_memory = dense_fp32_bytes < matrix_csr_bytes;
+        const bool dense_faster = gpu_dense.timing.median_ms < gpu_csr.timing.median_ms;
+        const char* preferred_format = dense_faster ? "dense_fp32_cublas_sgemv" : "csr_fp32";
 
         std::cout << "GFSS M5 L2 factorized-vs-materialized representation decision\n"
                   << "problem=thin_plate mesh=64x64x8\n"
                   << "hierarchy=frozen_theta_0p05_actual_L1_block_metric\n"
                   << "m0=1 m1=2\n"
-                  << "materialized_operator=exact_local_support_A2_then_structural_CSR_FP32\n"
+                  << "materialized_operator=exact_local_support_A2\n"
+                  << "materialized_formats=structural_CSR_FP32,dense_FP32_cuBLAS_SGEMV\n"
                   << "factorized_comparator=strict_lower_bound_5x_measured_A1_no_P1_overhead\n"
                   << "fine_dofs=" << mesh.dof_count()
                   << " L1_dofs=" << space0.coarse_dofs
@@ -312,7 +329,8 @@ int main(int argc, char** argv) {
                   << "L1_block_vs_nested_relative_error=" << block1_oracle_error << '\n'
                   << "A2_symmetry_relative_defect=" << a2.symmetry_relative_defect
                   << " materialized_A2_vs_nested_relative_error=" << materialized_vs_nested
-                  << " gpu_CSR_vs_nested_relative_error=" << gpu_vs_nested << '\n'
+                  << " gpu_CSR_vs_nested_relative_error=" << gpu_csr_vs_nested
+                  << " gpu_dense_vs_nested_relative_error=" << gpu_dense_vs_nested << '\n'
                   << std::fixed << std::setprecision(6)
                   << "A2_nnz=" << a2.values_fp32.size()
                   << " A2_nnz_per_row=" << nnz_per_row
@@ -324,22 +342,34 @@ int main(int argc, char** argv) {
                      static_cast<double>(std::max<std::size_t>(dense_fp32_bytes, 1U)) << '\n'
                   << "CSR_bytes_per_L2_dof="
                   << static_cast<double>(matrix_csr_bytes) / static_cast<double>(a2.n)
+                  << " dense_bytes_per_L2_dof="
+                  << static_cast<double>(dense_fp32_bytes) / static_cast<double>(a2.n)
                   << " CSR_bytes_per_fine_dof="
                   << static_cast<double>(matrix_csr_bytes) /
+                     static_cast<double>(mesh.dof_count())
+                  << " dense_bytes_per_fine_dof="
+                  << static_cast<double>(dense_fp32_bytes) /
                      static_cast<double>(mesh.dof_count()) << '\n'
                   << "A1_median_ms=" << a1_timing.median_timing.total_ms
                   << " A1_best_ms=" << a1_timing.best_timing.total_ms << '\n'
-                  << "factorized_A2_strict_lower_bound_ms=" << factorized_a2_lower_bound_ms
-                  << " materialized_A2_CSR_median_ms=" << gpu_csr.timing.median_ms
+                  << "factorized_A2_strict_lower_bound_ms=" << factorized_a2_lower_bound_ms << '\n'
+                  << "materialized_A2_CSR_median_ms=" << gpu_csr.timing.median_ms
                   << " materialized_A2_CSR_best_ms=" << gpu_csr.timing.best_ms
-                  << " lower_bound_speedup_materialized_over_factorized="
-                  << lower_bound_speedup << '\n'
-                  << "gpu_CSR_device_bytes_including_vectors=" << gpu_csr.device_bytes << '\n'
+                  << " CSR_speedup_over_factorized_lower_bound=" << csr_speedup_vs_factorized << '\n'
+                  << "materialized_A2_dense_median_ms=" << gpu_dense.timing.median_ms
+                  << " materialized_A2_dense_best_ms=" << gpu_dense.timing.best_ms
+                  << " dense_speedup_over_factorized_lower_bound=" << dense_speedup_vs_factorized
+                  << " dense_speedup_over_CSR=" << dense_speedup_vs_csr << '\n'
+                  << "gpu_CSR_device_bytes_including_vectors=" << gpu_csr.device_bytes
+                  << " gpu_dense_device_bytes_including_vectors=" << gpu_dense.device_bytes << '\n'
                   << "oracle_accept=" << (oracle_ok ? "true" : "false")
-                  << " materialized_beats_factorized_lower_bound="
-                  << (speed_ok ? "true" : "false") << '\n'
+                  << " CSR_beats_factorized_lower_bound=" << (csr_speed_ok ? "true" : "false")
+                  << " dense_beats_factorized_lower_bound=" << (dense_speed_ok ? "true" : "false")
+                  << " dense_uses_less_memory_than_CSR=" << (dense_less_memory ? "true" : "false")
+                  << " dense_faster_than_CSR=" << (dense_faster ? "true" : "false") << '\n'
                   << "selective_L2_materialization_candidate="
-                  << (oracle_ok && speed_ok ? "true" : "false") << '\n';
+                  << (oracle_ok && (csr_speed_ok || dense_speed_ok) ? "true" : "false") << '\n'
+                  << "preferred_materialized_format=" << preferred_format << '\n';
 
         return oracle_ok ? 0 : 2;
     } catch (const std::exception& e) {
