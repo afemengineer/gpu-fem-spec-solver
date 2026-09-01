@@ -39,6 +39,21 @@ struct GpuSmoothedAggregationCoarsePcgResult {
     std::size_t persistent_coarse_pcg_bytes{0};
 };
 
+// Experimental M5 L1 one-step block-Chebyshev result. This method is staged
+// in the standalone L1 benchmark TU until the exact-block metric and factorized
+// A1 path have passed the FP64 oracle on the reference GPU.
+struct GpuSmoothedAggregationL1BlockStepResult {
+    std::vector<float> x;
+    double median_a1_ms{0.0};
+    double median_block_update_ms{0.0};
+    double median_total_ms{0.0};
+    double best_a1_ms{0.0};
+    double best_block_update_ms{0.0};
+    double best_total_ms{0.0};
+    std::size_t fine_operator_applies{0};
+    std::size_t persistent_l1_bytes{0};
+};
+
 // Persistent GPU implementation of
 //
 //   y_c = P_m^T A P_m x_c,
@@ -83,6 +98,19 @@ public:
         const std::vector<float>& inverse_preconditioner,
         std::size_t transfer_smoothing_steps,
         std::size_t max_iterations);
+
+    // One degree-1 block-Chebyshev/Jacobi update on L1 using the actual
+    // diagonal-block inverse supplied as one padded row-major 6x6 matrix per
+    // fine aggregate. The factorized A1=P_m^T A0 P_m action and block update
+    // remain device-resident inside the timed loop. This entry point is defined
+    // only by the standalone M5 L1 staging benchmark for now.
+    GpuSmoothedAggregationL1BlockStepResult l1_block_chebyshev_step(
+        const std::vector<float>& rhs,
+        const std::vector<float>& initial_x,
+        const std::vector<float>& inverse_blocks_6x6,
+        double lambda_max,
+        std::size_t transfer_smoothing_steps,
+        int repeats = 50);
 
     std::size_t fine_dofs() const noexcept;
     std::size_t coarse_dofs() const noexcept;
