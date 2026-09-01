@@ -68,6 +68,24 @@ target_include_directories(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
 set_target_properties(gfss_gpu_m5_l1_block_smoother_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
+# Complete staged L1 shell. The CUDA implementation includes
+# gpu_smoothed_aggregation.cu directly so it can reuse the context's packed L1
+# buffers while executing explicit dual-order block6 P1/P1T. Keep it separate
+# from gfss_cuda_operator to avoid duplicate smoothed-aggregation symbols.
+add_executable(gfss_gpu_m5_l1_full_shell_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_full_shell_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_full_shell_impl.cu)
+target_link_libraries(gfss_gpu_m5_l1_full_shell_bench PRIVATE
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l1_full_shell_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_l1_full_shell_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
+
 # Final-hierarchy L2 representation decision. CPU setup reconstructs the exact
 # localized A2 used by the frozen reference hierarchy and benchmarks both CSR
 # and dense FP32 materializations against the factorized m1=2 lower bound.
