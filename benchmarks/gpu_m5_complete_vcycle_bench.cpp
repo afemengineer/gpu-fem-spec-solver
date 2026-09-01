@@ -61,6 +61,19 @@ std::vector<double> vcycle_residual(const Apply& apply,
     return r;
 }
 
+std::vector<double> vcycle_axpy(const std::vector<double>& x,
+                                const std::vector<double>& y,
+                                double alpha) {
+    if (x.size() != y.size()) {
+        throw std::invalid_argument("M5 V-cycle axpy size mismatch");
+    }
+    std::vector<double> out(x.size(), 0.0);
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        out[i] = x[i] + alpha * y[i];
+    }
+    return out;
+}
+
 std::vector<float> bottom_lower_to_float(const DenseCholesky& factor) {
     return vcycle_to_float(factor.lower);
 }
@@ -204,11 +217,11 @@ int main(int argc, char** argv) {
         const auto b3 = transfer2.restrict_transpose(r2);
         const auto x3 = bottom.factor.solve(b3);
 
-        x2 = axpy(x2, transfer2.prolong(x3), 1.0);
+        x2 = vcycle_axpy(x2, transfer2.prolong(x3), 1.0);
         chebyshev_l1_block_smooth(apply2, block2, lambda2, b2, x2, nu2);
-        x1 = axpy(x1, transfer1.prolong(x2), 1.0);
+        x1 = vcycle_axpy(x1, transfer1.prolong(x2), 1.0);
         chebyshev_l1_block_smooth(apply1, block1, lambda1, b1, x1, nu1);
-        x0 = axpy(x0, transfer0.prolong(x1), 1.0);
+        x0 = vcycle_axpy(x0, transfer0.prolong(x1), 1.0);
         chebyshev_smooth(apply0, fine_inverse, lambda0, rhs, x0, nu0);
         clamp_x0(mesh, x0);
         const double cpu_vcycle_ms = std::chrono::duration<double, std::milli>(
