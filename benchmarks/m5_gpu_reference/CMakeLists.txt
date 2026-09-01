@@ -92,3 +92,18 @@ target_link_libraries(gfss_gpu_m5_l1_l2_transfer_representation_bench PRIVATE
 target_include_directories(gfss_gpu_m5_l1_l2_transfer_representation_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Natural 6x6 block representation of the same exact P1. The FP32 block values
+# are stored once; P1 and P1^T use separate lightweight index structures. This
+# benchmark compares memory and runtime directly with the passed dual scalar-CSR
+# path and with the strict factorized m1=2 lower bound.
+add_executable(gfss_gpu_m5_l1_l2_block_transfer_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_l2_block_transfer_bench.cpp)
+target_link_libraries(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
+    gfss_cuda_operator
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l1_l2_block_transfer_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
