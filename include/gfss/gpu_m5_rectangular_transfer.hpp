@@ -71,4 +71,28 @@ GpuM5Block6TransferResult benchmark_m5_block6_transfer(
     const std::vector<float>& transpose_x_padded,
     int repeats = 100);
 
+struct GpuM5Block6TransposeSoAResult {
+    std::vector<float> y_padded;
+    GpuM5RectangularTransferTiming timing;
+    std::size_t block_rows{0U};
+    std::size_t block_cols{0U};
+    std::size_t block_nnz{0U};
+    std::size_t device_bytes{0U};
+};
+
+// Transpose-only benchmark for a second, transpose-ordered FP32 block-value
+// payload. For each L2 block column c with n incident L1 blocks, values are laid
+// out as [q][r][entry] (6 x 6 x n). One warp owns one output component q and
+// stripes the incident block entries across 32 lanes. This duplicates only the
+// 6x6 value payload, not scalar CSR indices, and makes the coefficient reads
+// coalesced in transpose order. H2D setup and final D2H are excluded from timing.
+GpuM5Block6TransposeSoAResult benchmark_m5_block6_transpose_soa(
+    std::size_t block_rows,
+    std::size_t block_cols,
+    const std::vector<std::uint32_t>& transpose_column_offsets,
+    const std::vector<std::uint32_t>& transpose_row_indices,
+    const std::vector<float>& transpose_values_q_r_entry,
+    const std::vector<float>& x_padded,
+    int repeats = 100);
+
 }  // namespace gfss
