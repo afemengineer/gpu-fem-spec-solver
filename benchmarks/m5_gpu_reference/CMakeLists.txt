@@ -29,6 +29,7 @@ endif()
 target_sources(gfss_cuda_operator PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_fine_level.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_l2_materialized.cu
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_l2_full_shell.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_rectangular_csr_only.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transfer_optimized.cu
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_block6_transpose_soa.cu)
@@ -97,6 +98,22 @@ target_link_libraries(gfss_gpu_m5_l2_representation_bench PRIVATE
     CUDA::cudart
     CUDA::cublas)
 target_include_directories(gfss_gpu_m5_l2_representation_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Complete staged L2 shell. A2 is the passed dense FP32 materialization; the
+# exact m2=1 smoothed P2 is small enough to materialize as one dense rectangular
+# payload used by cuBLAS for both restriction and prolongation. The benchmark
+# compares the full device-resident shell against the original FP64 factorized
+# hierarchy with an externally supplied deterministic L3 correction.
+add_executable(gfss_gpu_m5_l2_full_shell_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l2_full_shell_bench.cpp)
+target_link_libraries(gfss_gpu_m5_l2_full_shell_bench PRIVATE
+    gfss_cuda_operator
+    gfss_multigrid_reference
+    CUDA::cudart
+    CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l2_full_shell_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
