@@ -114,3 +114,19 @@ target_link_libraries(gfss_gpu_m5_l1_l2_block_transpose_soa_bench PRIVATE
 target_include_directories(gfss_gpu_m5_l1_l2_block_transpose_soa_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# First complete persistent 4-level 5x1x1 V-cycle. The implementation includes
+# gpu_m5_fine_level.cu directly so A0/P0 metadata, fine work vectors and the
+# GoldSparse stencil remain in one context while recursive L1/L2/L3 execution
+# stays entirely device-resident. Do not link gfss_cuda_operator here.
+add_executable(gfss_gpu_m5_complete_vcycle_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_complete_vcycle_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_complete_vcycle_impl.cu)
+target_link_libraries(gfss_gpu_m5_complete_vcycle_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_complete_vcycle_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_complete_vcycle_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
