@@ -4,6 +4,7 @@
 #include "gfss/structured_hex_mesh.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -61,6 +62,34 @@ struct GpuM5FineFullShellResult {
     std::size_t model_coordinate_bytes{0};
 };
 
+// Timing decomposition for one complete frozen 4-level 5x1x1 V-cycle.
+// Each interval includes all kernels needed to move from the named level to the
+// next boundary; setup/H2D/final D2H are excluded.
+struct GpuM5CompleteVcycleTiming {
+    double l0_down_ms{0.0};
+    double l1_down_ms{0.0};
+    double l2_down_ms{0.0};
+    double l3_solve_ms{0.0};
+    double l2_up_ms{0.0};
+    double l1_up_ms{0.0};
+    double l0_up_ms{0.0};
+    double total_ms{0.0};
+};
+
+struct GpuM5CompleteVcycleResult {
+    // Final fine correction in AoS layout, matching the solver-facing vector.
+    std::vector<float> fine_correction_aos;
+    // Bottom RHS before the direct solve, retained as an intermediate oracle.
+    std::vector<float> l3_rhs;
+    GpuM5CompleteVcycleTiming median_timing;
+    GpuM5CompleteVcycleTiming best_timing;
+    std::size_t device_bytes_total{0};
+    std::size_t l0_operator_applies{0};
+    std::size_t l1_operator_applies{0};
+    std::size_t l2_operator_applies{0};
+    std::size_t bottom_dofs{0};
+};
+
 // Persistent M5 fine-level execution context.
 //
 // The validated upper-half operation is
@@ -104,12 +133,38 @@ public:
     // Execute the complete fine-level symmetric V-cycle shell around an
     // externally supplied L1 correction. This deliberately does not implement
     // the L1 solve yet; it provides the device-resident contract that the
-    // recursive L1/L2 production path will plug into next.
+    // recursive L1/L2 production path plugs into.
     GpuM5FineFullShellResult full_shell(
         const std::vector<float>& rhs_aos,
         const std::vector<float>& coarse_correction,
         std::size_t smoother_degree,
         std::size_t transfer_smoothing_steps,
+        int repeats = 50);
+
+    // Staged complete 4-level GPU V-cycle for the frozen 5x1x1 hierarchy.
+    // This entry point is defined only by the standalone complete-cycle
+    // benchmark TU until the full cycle passes its independent FP64 oracle.
+    // P1 is dual-order block6, A2/P2 are dense FP32, and the L3 Cholesky factor
+    // is supplied as a row-major FP32 lower triangle.
+    GpuM5CompleteVcycleResult complete_vcycle_5x1x1(
+        const std::vector<float>& rhs_aos,
+        std::size_t l0_smoother_degree,
+        std::size_t m0,
+        const std::vector<float>& l1_inverse_blocks_6x6,
+        double lambda1,
+        std::size_t l2_nodes,
+        const std::vector<std::uint32_t>& p1_forward_row_offsets,
+        const std::vector<std::uint32_t>& p1_forward_column_indices,
+        const std::vector<float>& p1_forward_values_6x6,
+        const std::vector<std::uint32_t>& p1_transpose_column_offsets,
+        const std::vector<std::uint32_t>& p1_transpose_row_indices,
+        const std::vector<float>& p1_transpose_values_q_r_entry,
+        const std::vector<float>& a2_dense_row_major,
+        const std::vector<float>& l2_inverse_blocks_6x6,
+        double lambda2,
+        const std::vector<float>& p2_dense_row_major,
+        std::size_t l3_dofs,
+        const std::vector<float>& l3_cholesky_lower_row_major,
         int repeats = 50);
 
     std::size_t fine_dofs() const noexcept;
