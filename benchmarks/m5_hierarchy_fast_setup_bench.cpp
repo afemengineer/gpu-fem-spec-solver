@@ -32,6 +32,27 @@ double rel_error(const Vec& a, const Vec& b) {
     return norm(d) / std::max(norm(b), 1.0e-300);
 }
 
+std::vector<float> fast_symmetric_inverse_col_major(const DenseCholesky& factor) {
+    const std::size_t n = factor.n;
+    std::vector<double> inverse(n * n, 0.0);
+    for (std::size_t j = 0U; j < n; ++j) {
+        Vec e(n, 0.0);
+        e[j] = 1.0;
+        const auto column = factor.solve(e);
+        for (std::size_t i = 0U; i < n; ++i) inverse[i * n + j] = column[i];
+    }
+    std::vector<float> out(n * n, 0.0f);
+    for (std::size_t i = 0U; i < n; ++i) {
+        for (std::size_t j = i; j < n; ++j) {
+            const float value = static_cast<float>(
+                0.5 * (inverse[i * n + j] + inverse[j * n + i]));
+            out[j * n + i] = value;
+            out[i * n + j] = value;
+        }
+    }
+    return out;
+}
+
 template <class LocalApply>
 std::vector<LocalColumns> build_smoothed_supports_parallel(
     const CandidateTransfer& transfer,
@@ -383,6 +404,12 @@ int main(int argc, char** argv) {
         const auto block2 = metric_from_cached_applied(transfer1, block1, l2_basis, applied_l2_basis);
         const double block2_ms = fast_ms(metric_start, FastClock::now());
 
+        const auto payload1_start = FastClock::now();
+        const auto p1 = m5_p1_setup::assemble_dual_order_block6(transfer1, block1, l2_basis);
+        const auto inverse1 = m5_l2_setup::inverse_blocks_6x6_fp32(block1);
+        const auto inverse2 = m5_l2_setup::inverse_blocks_6x6_fp32(block2);
+        const double p1_payload_ms = fast_ms(payload1_start, FastClock::now());
+
         const auto a2_start = FastClock::now();
         const auto a2 = dense_a2_from_cached_applied(transfer1, block1, l2_basis, applied_l2_basis);
         const double a2_ms = fast_ms(a2_start, FastClock::now());
@@ -401,6 +428,12 @@ int main(int argc, char** argv) {
         const auto bottom_start = FastClock::now();
         const auto bottom = dense_bottom_from_a2_p2(a2, p2);
         const double bottom_ms = fast_ms(bottom_start, FastClock::now());
+
+        const auto final_payload_start = FastClock::now();
+        const auto bottom_inverse = fast_symmetric_inverse_col_major(bottom.factor);
+        const auto a2_fp32 = m5_l2_setup::to_float(a2.fp64);
+        const auto p2_fp32 = m5_l2_setup::to_float(p2.fp64);
+        const double final_payload_ms = fast_ms(final_payload_start, FastClock::now());
         const double production_total_ms = fast_ms(total_start, FastClock::now());
 
         // Independent probes against the established nested hierarchy.
@@ -441,10 +474,18 @@ int main(int argc, char** argv) {
                   << "fast_L2_basis_ms=" << l2_basis_ms
                   << " cached_final_A1P1_ms=" << cached_apply_ms
                   << " fast_L2_block_metric_ms=" << block2_ms
+                  << " P1_plus_block_inverses_ms=" << p1_payload_ms
                   << " fast_A2_dense_ms=" << a2_ms
                   << " fast_lambda2_ms=" << lambda2_ms
                   << " fast_P2_dense_ms=" << p2_ms
-                  << " fast_bottom_A3_ms=" << bottom_ms << '\n'
+                  << " fast_bottom_A3_ms=" << bottom_ms
+                  << " final_FP32_payload_ms=" << final_payload_ms << '\n'
+                  << "payload_P1_nnz=" << p1.forward_column_indices.size()
+                  << " inverse1_values=" << inverse1.size()
+                  << " inverse2_values=" << inverse2.size()
+                  << " A2_fp32_values=" << a2_fp32.size()
+                  << " P2_fp32_values=" << p2_fp32.size()
+                  << " bottom_inverse_values=" << bottom_inverse.size() << '\n'
                   << "A2_symmetry_relative_defect=" << std::scientific << a2.symmetry_relative_defect
                   << " bottom_symmetry_relative_defect=" << bottom.factor.symmetry_relative_defect << '\n';
         return oracle_ok ? 0 : 2;
