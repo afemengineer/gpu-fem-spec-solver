@@ -8,6 +8,7 @@
 #include "m5_l2_dense_setup.hpp"
 #include "m5_fast_hierarchy_setup.hpp"
 #include "m5_materialized_a1_setup.hpp"
+#include "m5_parallel_actual_a1_setup.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -22,6 +23,10 @@ using Clock = std::chrono::steady_clock;
 
 struct StageTimes {
     double actual_a1_offdiagonal_ms{0.0};
+    double actual_a1_local_accumulation_ms{0.0};
+    double actual_a1_reduction_ms{0.0};
+    int actual_a1_threads{1};
+    std::size_t actual_a1_summed_thread_entries{0U};
     double materialized_a1_ms{0.0};
     double l2_basis_ms{0.0};
     double cached_a1p1_ms{0.0};
@@ -148,12 +153,16 @@ inline FastHierarchy build(
         mesh, material, space0, fine_inverse, omega0, p0_support_ms);
     const auto element_supports = build_element_support_index(mesh, fine_supports);
 
-    auto stage = Clock::now();
-    const auto actual_a1_offdiagonal = accumulate_combined_actual_a1_offdiagonal_blocks(
+    const auto parallel_a1 = m5_parallel_a1::assemble(
         mesh, material, fine_supports, element_supports);
-    out.stages.actual_a1_offdiagonal_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+    const auto& actual_a1_offdiagonal = parallel_a1.blocks;
+    out.stages.actual_a1_offdiagonal_ms = parallel_a1.total_ms;
+    out.stages.actual_a1_local_accumulation_ms = parallel_a1.local_accumulation_ms;
+    out.stages.actual_a1_reduction_ms = parallel_a1.deterministic_reduction_ms;
+    out.stages.actual_a1_threads = parallel_a1.threads;
+    out.stages.actual_a1_summed_thread_entries = parallel_a1.summed_thread_entries;
 
-    stage = Clock::now();
+    auto stage = Clock::now();
     const auto temporary_a1 = m5_materialized_a1::build(block1, actual_a1_offdiagonal);
     out.stages.materialized_a1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
     out.temporary_a1_logical_bytes = temporary_a1.logical_bytes;
