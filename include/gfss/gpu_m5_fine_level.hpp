@@ -48,7 +48,6 @@ struct GpuM5FineFullShellTiming {
 
 struct GpuM5FineFullShellResult {
     std::vector<float> coarse_residual;
-    // Host-facing fine correction is AoS, matching the rest of the solver API.
     std::vector<float> fine_correction_aos;
     GpuM5FineFullShellTiming median_timing;
     GpuM5FineFullShellTiming best_timing;
@@ -62,9 +61,6 @@ struct GpuM5FineFullShellResult {
     std::size_t model_coordinate_bytes{0};
 };
 
-// Timing decomposition for one complete frozen 4-level 5x1x1 V-cycle.
-// Each interval includes all kernels needed to move from the named level to the
-// next boundary; setup/H2D/final D2H are excluded.
 struct GpuM5CompleteVcycleTiming {
     double l0_down_ms{0.0};
     double l1_down_ms{0.0};
@@ -77,9 +73,7 @@ struct GpuM5CompleteVcycleTiming {
 };
 
 struct GpuM5CompleteVcycleResult {
-    // Final fine correction in AoS layout, matching the solver-facing vector.
     std::vector<float> fine_correction_aos;
-    // Bottom RHS before the direct solve, retained as an intermediate oracle.
     std::vector<float> l3_rhs;
     GpuM5CompleteVcycleTiming median_timing;
     GpuM5CompleteVcycleTiming best_timing;
@@ -90,10 +84,6 @@ struct GpuM5CompleteVcycleResult {
     std::size_t bottom_dofs{0};
 };
 
-// Fixed-iteration staging result for a fully device-resident left-preconditioned
-// CG solve. The complete 5x1x1 V-cycle is applied as M^-1 without H2D/D2H or
-// host scalar reductions inside a timed solve. A final host-facing solution is
-// returned for the independent FP64 true-residual oracle.
 struct GpuM5VcyclePcgResult {
     std::vector<float> solution_aos;
     double median_solve_ms{0.0};
@@ -108,24 +98,6 @@ struct GpuM5VcyclePcgResult {
     bool breakdown{false};
 };
 
-// Persistent M5 fine-level execution context.
-//
-// The validated upper-half operation is
-//
-//   x0 = 0
-//   x0 <- degree-n Chebyshev(D0^-1 A0, b0)
-//   r0 = b0 - A0 x0
-//   r1 = P0^T r0
-//
-// and full_shell() extends it with an externally supplied L1 correction e1:
-//
-//   x0 <- x0 + P0 e1
-//   x0 <- degree-n Chebyshev(D0^-1 A0, b0, initial=x0)
-//
-// where P0 = (I - omega0 D0^-1 A0)^m0 P0_tentative and P0^T uses the exact
-// transpose (I - omega0 A0 D0^-1)^m0. Fine vectors, the external L1
-// correction, and aggregation metadata remain resident on device throughout
-// each timed application. Host transfers are excluded from reported timings.
 class GpuM5FineLevelContext {
 public:
     GpuM5FineLevelContext(
@@ -148,10 +120,6 @@ public:
         std::size_t transfer_smoothing_steps,
         int repeats = 50);
 
-    // Execute the complete fine-level symmetric V-cycle shell around an
-    // externally supplied L1 correction. This deliberately does not implement
-    // the L1 solve yet; it provides the device-resident contract that the
-    // recursive L1/L2 production path plugs into.
     GpuM5FineFullShellResult full_shell(
         const std::vector<float>& rhs_aos,
         const std::vector<float>& coarse_correction,
@@ -159,11 +127,6 @@ public:
         std::size_t transfer_smoothing_steps,
         int repeats = 50);
 
-    // Staged complete 4-level GPU V-cycle for the frozen 5x1x1 hierarchy.
-    // This entry point is defined only by the standalone complete-cycle
-    // benchmark TU until the full cycle passes its independent FP64 oracle.
-    // P1 is dual-order block6, A2/P2 are dense FP32, and the L3 Cholesky factor
-    // is supplied as a row-major FP32 lower triangle.
     GpuM5CompleteVcycleResult complete_vcycle_5x1x1(
         const std::vector<float>& rhs_aos,
         std::size_t l0_smoother_degree,
@@ -185,10 +148,6 @@ public:
         const std::vector<float>& l3_cholesky_lower_row_major,
         int repeats = 50);
 
-    // Fixed-iteration fully device-resident PCG staging path. The number of
-    // iterations is intentionally fixed so no host convergence check or scalar
-    // round trip contaminates the timed inner solve. The caller performs the
-    // authoritative FP64 true-residual verification on the returned solution.
     GpuM5VcyclePcgResult solve_pcg_vcycle_5x1x1_fixed(
         const std::vector<float>& rhs_aos,
         std::size_t iterations,
@@ -217,6 +176,7 @@ public:
     double smoother_lambda_max() const noexcept;
 
 private:
+    friend class M5PersistentPcgStaging;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
