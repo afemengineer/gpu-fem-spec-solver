@@ -52,16 +52,26 @@ int main(int argc, char** argv) {
         const std::size_t min_nodes = argc > 5
             ? static_cast<std::size_t>(std::stoull(argv[5])) : 4U;
         const double outer_tolerance = argc > 6 ? std::stod(argv[6]) : 1.0e-6;
+        const std::size_t nx = argc > 7
+            ? static_cast<std::size_t>(std::stoull(argv[7])) : 64U;
+        const std::size_t ny = argc > 8
+            ? static_cast<std::size_t>(std::stoull(argv[8])) : 64U;
+        const std::size_t nz = argc > 9
+            ? static_cast<std::size_t>(std::stoull(argv[9])) : 8U;
         if (inner_iterations == 0U || inner_iterations > 64U ||
             max_outer == 0U || max_outer > 32U || block_y <= 0 ||
             target_nodes < 2U || min_nodes == 0U || min_nodes > target_nodes ||
-            !(outer_tolerance > 0.0) || outer_tolerance >= 1.0) {
+            !(outer_tolerance > 0.0) || outer_tolerance >= 1.0 ||
+            nx < 2U || ny < 2U || nz < 1U) {
             throw std::invalid_argument("invalid M5 integrated end-to-end options");
         }
 
         constexpr std::size_t nu0 = 5U;
         constexpr std::size_t m0 = 1U;
-        const gfss::StructuredHexMesh mesh{64U, 64U, 8U, 1.0, 1.0, 0.125};
+        // Keep the physical thin plate fixed while varying nx/ny/nz. Optional
+        // mesh arguments therefore measure h-refinement/scaling rather than a
+        // change in geometry or slenderness.
+        const gfss::StructuredHexMesh mesh{nx, ny, nz, 1.0, 1.0, 0.125};
         const gfss::Material material{210.0e9, 0.30};
         const auto benchmark_start = EndClock::now();
 
@@ -176,7 +186,8 @@ int main(int argc, char** argv) {
             hierarchy.validation_oracle_ms + benchmark_warmup_ms;
 
         std::cout << "GFSS M5 exact materialized-A1 fast-setup + persistent solver integration\n"
-                  << "problem=thin_plate mesh=64x64x8\n"
+                  << "problem=thin_plate mesh=" << nx << 'x' << ny << 'x' << nz
+                  << " physical=1x1x0.125\n"
                   << "rhs=physical_uniform_z_xmax\n"
                   << "hierarchy_setup=temporary_exact_A1_parallel_L2_cached_A1P1_dense_A2_driven_L3\n"
                   << "temporary_A1_policy=host_setup_only_discarded_before_runtime\n"
@@ -255,7 +266,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n'
                   << "usage: gfss_gpu_m5_fastsetup_persistent_solver_bench "
-                  << "[inner_iterations=5 [max_outer=8 [block_y=4 [target_nodes=12 [min_nodes=4 [outer_tol=1e-6]]]]]]\n";
+                  << "[inner_iterations=5 [max_outer=8 [block_y=4 [target_nodes=12 [min_nodes=4 [outer_tol=1e-6 [nx=64 [ny=64 [nz=8]]]]]]]]\n";
         return 1;
     }
 }
