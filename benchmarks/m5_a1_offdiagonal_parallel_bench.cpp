@@ -6,6 +6,7 @@
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
 #include "m5_materialized_a1_setup.hpp"
 #include "m5_parallel_actual_a1_setup.hpp"
+#include "m5_sorted_reduce_actual_a1_setup.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -71,30 +72,47 @@ int main(int argc, char** argv) {
 
         const auto parallel = m5_parallel_a1::assemble(
             mesh, material, fine_supports, element_supports);
-        const double block_error = m5_parallel_a1::block_map_relative_error(
+        const auto sorted_reduce = m5_sorted_reduce_a1::assemble(
+            mesh, material, fine_supports, element_supports);
+
+        const double parallel_block_error = m5_parallel_a1::block_map_relative_error(
             parallel.blocks, serial_blocks);
+        const double sorted_block_error = m5_parallel_a1::block_map_relative_error(
+            sorted_reduce.blocks, serial_blocks);
+        const double sorted_vs_parallel_block_error = m5_parallel_a1::block_map_relative_error(
+            sorted_reduce.blocks, parallel.blocks);
 
         const auto serial_a1 = m5_materialized_a1::build(block1, serial_blocks);
         const auto parallel_a1 = m5_materialized_a1::build(block1, parallel.blocks);
+        const auto sorted_a1 = m5_materialized_a1::build(block1, sorted_reduce.blocks);
         const auto probe = deterministic_actual_a2_probe(block1.dofs(), 0.47);
         const auto nested_y = apply1(probe);
         const double serial_nested_error = rel_error(
             m5_materialized_a1::apply_vector(serial_a1, block1, probe), nested_y);
         const double parallel_nested_error = rel_error(
             m5_materialized_a1::apply_vector(parallel_a1, block1, probe), nested_y);
-        const double parallel_vs_serial_apply_error = rel_error(
-            m5_materialized_a1::apply_vector(parallel_a1, block1, probe),
-            m5_materialized_a1::apply_vector(serial_a1, block1, probe));
+        const double sorted_nested_error = rel_error(
+            m5_materialized_a1::apply_vector(sorted_a1, block1, probe), nested_y);
+        const double sorted_vs_parallel_apply_error = rel_error(
+            m5_materialized_a1::apply_vector(sorted_a1, block1, probe),
+            m5_materialized_a1::apply_vector(parallel_a1, block1, probe));
 
-        const bool keys_match = parallel.blocks.size() == serial_blocks.size();
-        const bool oracle_ok = keys_match && block_error <= 1.0e-12 &&
+        const bool keys_match = parallel.blocks.size() == serial_blocks.size() &&
+                                sorted_reduce.blocks.size() == serial_blocks.size();
+        const bool oracle_ok = keys_match &&
+                               parallel_block_error <= 1.0e-12 &&
+                               sorted_block_error <= 1.0e-12 &&
+                               sorted_vs_parallel_block_error <= 1.0e-12 &&
                                parallel_nested_error <= 1.0e-10 &&
-                               parallel_vs_serial_apply_error <= 1.0e-12;
-        const double speedup = parallel.total_ms > 0.0 ? serial_ms / parallel.total_ms : 0.0;
+                               sorted_nested_error <= 1.0e-10 &&
+                               sorted_vs_parallel_apply_error <= 1.0e-12;
+        const double speedup = parallel.total_ms > 0.0
+            ? parallel.total_ms / sorted_reduce.total_ms : 0.0;
 
-        std::cout << "GFSS M5 parallel exact actual-A1 off-diagonal assembly\n"
+        std::cout << "GFSS M5 parallel exact actual-A1 reduction comparison\n"
                   << "problem=thin_plate mesh=64x64x8\n"
-                  << "method=OpenMP_thread_local_maps_static_element_partition_deterministic_reduction\n"
+                  << "reference=thread_local_maps_sorted_keys_global_hash_reduction\n"
+                  << "candidate=thread_local_maps_sorted_entry_stream_kway_merge_single_export\n"
 #ifdef _OPENMP
                   << "openmp_enabled=true\n"
 #else
@@ -103,23 +121,34 @@ int main(int argc, char** argv) {
                   << "threads=" << parallel.threads
                   << " fine_dofs=" << mesh.dof_count()
                   << " L1_dofs=" << block1.dofs() << '\n'
-                  << std::scientific << std::setprecision(9)
-                  << "parallel_block_map_relative_error=" << block_error
-                  << " serial_A1_vs_nested_relative_error=" << serial_nested_error
+                  << std::scientific << std::setprecision(12)
+                  << "parallel_block_map_relative_error=" << parallel_block_error
+                  << " sorted_block_map_relative_error=" << sorted_block_error
+                  << " sorted_vs_parallel_block_relative_error=" << sorted_vs_parallel_block_error << '\n'
+                  << "serial_A1_vs_nested_relative_error=" << serial_nested_error
                   << " parallel_A1_vs_nested_relative_error=" << parallel_nested_error
-                  << " parallel_vs_serial_apply_relative_error=" << parallel_vs_serial_apply_error
+                  << " sorted_A1_vs_nested_relative_error=" << sorted_nested_error
+                  << " sorted_vs_parallel_apply_relative_error=" << sorted_vs_parallel_apply_error
                   << " oracle_accept=" << (oracle_ok ? "true" : "false") << '\n'
                   << std::fixed << std::setprecision(6)
-                  << "serial_offdiagonal_ms=" << serial_ms
-                  << " parallel_local_accumulation_ms=" << parallel.local_accumulation_ms
-                  << " parallel_reduction_ms=" << parallel.deterministic_reduction_ms
-                  << " parallel_total_ms=" << parallel.total_ms
-                  << " speedup_vs_serial=" << speedup << '\n'
+                  << "serial_offdiagonal_ms=" << serial_ms << '\n'
+                  << "reference_local_accumulation_ms=" << parallel.local_accumulation_ms
+                  << " reference_reduction_ms=" << parallel.deterministic_reduction_ms
+                  << " reference_total_ms=" << parallel.total_ms << '\n'
+                  << "sorted_local_accumulation_ms=" << sorted_reduce.local_accumulation_ms
+                  << " sorted_stream_sort_ms=" << sorted_reduce.stream_sort_ms
+                  << " sorted_merge_ms=" << sorted_reduce.merge_ms
+                  << " sorted_export_map_ms=" << sorted_reduce.export_map_ms
+                  << " sorted_total_ms=" << sorted_reduce.total_ms
+                  << " speedup_vs_reference=" << speedup << '\n'
                   << "serial_unique_pairs=" << serial_blocks.size()
-                  << " parallel_unique_pairs=" << parallel.blocks.size()
-                  << " summed_thread_entries=" << parallel.summed_thread_entries
-                  << " serial_materialization_ms=" << serial_a1.setup_ms
-                  << " parallel_materialization_ms=" << parallel_a1.setup_ms << '\n';
+                  << " reference_unique_pairs=" << parallel.blocks.size()
+                  << " sorted_unique_pairs=" << sorted_reduce.blocks.size()
+                  << " reference_summed_thread_entries=" << parallel.summed_thread_entries
+                  << " sorted_summed_thread_entries=" << sorted_reduce.summed_thread_entries << '\n'
+                  << "serial_materialization_ms=" << serial_a1.setup_ms
+                  << " reference_materialization_ms=" << parallel_a1.setup_ms
+                  << " sorted_materialization_ms=" << sorted_a1.setup_ms << '\n';
 
         return oracle_ok ? 0 : 2;
     } catch (const std::exception& e) {
