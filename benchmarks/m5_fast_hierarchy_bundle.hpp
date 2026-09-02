@@ -7,6 +7,7 @@
 #include "m5_p1_block6_setup.hpp"
 #include "m5_l2_dense_setup.hpp"
 #include "m5_fast_hierarchy_setup.hpp"
+#include "m5_materialized_a1_setup.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -20,6 +21,8 @@ namespace m5_fast_bundle {
 using Clock = std::chrono::steady_clock;
 
 struct StageTimes {
+    double actual_a1_offdiagonal_ms{0.0};
+    double materialized_a1_ms{0.0};
     double l2_basis_ms{0.0};
     double cached_a1p1_ms{0.0};
     double l2_metric_ms{0.0};
@@ -33,6 +36,7 @@ struct StageTimes {
 
 struct OracleErrors {
     double l1_block{0.0};
+    double a1_materialized{0.0};
     double l2_block{0.0};
     double a2_dense{0.0};
     double p2_dense{0.0};
@@ -66,6 +70,7 @@ struct FastHierarchy {
 
     StageTimes stages;
     OracleErrors oracle;
+    std::size_t temporary_a1_logical_bytes{0U};
     double production_setup_ms{0.0};
     double validation_oracle_ms{0.0};
 };
@@ -142,8 +147,17 @@ inline FastHierarchy build(
     const auto fine_supports = build_fine_basis_support_cache(
         mesh, material, space0, fine_inverse, omega0, p0_support_ms);
     const auto element_supports = build_element_support_index(mesh, fine_supports);
+
+    auto stage = Clock::now();
     const auto actual_a1_offdiagonal = accumulate_combined_actual_a1_offdiagonal_blocks(
         mesh, material, fine_supports, element_supports);
+    out.stages.actual_a1_offdiagonal_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
+    const auto temporary_a1 = m5_materialized_a1::build(block1, actual_a1_offdiagonal);
+    out.stages.materialized_a1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+    out.temporary_a1_logical_bytes = temporary_a1.logical_bytes;
+
     const auto strength1 = build_combined_strength_graph(
         graph1_tentative, block1, actual_a1_offdiagonal, strength_threshold);
     auto transfer1 = build_candidate_transfer(
@@ -154,10 +168,10 @@ inline FastHierarchy build(
         return transfer1_nested.restrict_transpose(apply1(transfer1_nested.prolong(x)));
     };
     const auto local_a1 = [&](const LocalColumns& x) {
-        return apply_local_a1_columns(mesh, material, fine_supports, element_supports, x);
+        return m5_materialized_a1::apply_columns(temporary_a1, block1, x);
     };
 
-    auto stage = Clock::now();
+    stage = Clock::now();
     const auto l2_basis = m5_fast_setup::build_smoothed_supports_parallel(
         transfer1, strength1.graph, block1, omega1, m1, local_a1);
     out.stages.l2_basis_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
@@ -214,6 +228,10 @@ inline FastHierarchy build(
     if (run_validation_oracles) {
         const auto validation_start = Clock::now();
         out.oracle.l1_block = audit_l1_block_metric(block1, apply1);
+        const auto a1_probe = deterministic_actual_a2_probe(block1.dofs(), 0.47);
+        out.oracle.a1_materialized = relative_error(
+            m5_materialized_a1::apply_vector(temporary_a1, block1, a1_probe),
+            apply1(a1_probe));
         out.oracle.l2_block = audit_l1_block_metric(block2, apply2_nested);
         const auto probe2 = deterministic_actual_a2_probe(a2.n, 0.63);
         out.oracle.a2_dense = relative_error(apply2_dense(probe2), apply2_nested(probe2));
@@ -231,6 +249,7 @@ inline FastHierarchy build(
             inverse_identity_relative_error(bottom, bottom_inverse_fp32);
         out.validation_oracle_ms = m5_fast_setup::elapsed_ms(validation_start, Clock::now());
         out.oracle.accept = out.oracle.l1_block <= 1.0e-10 &&
+                            out.oracle.a1_materialized <= 1.0e-10 &&
                             out.oracle.l2_block <= 1.0e-10 &&
                             out.oracle.a2_dense <= 1.0e-10 &&
                             out.oracle.p2_dense <= 1.0e-10 &&
