@@ -195,3 +195,13 @@ target_link_libraries(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
 target_include_directories(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Exact setup optimization experiment: parallel aggregate-local work, cache the
+# final A1*P1 columns once, then use exact dense A2 for lambda2, P2 and A3.
+add_executable(gfss_gpu_m5_hierarchy_fast_setup_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_fast_setup_bench.cpp)
+target_link_libraries(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
