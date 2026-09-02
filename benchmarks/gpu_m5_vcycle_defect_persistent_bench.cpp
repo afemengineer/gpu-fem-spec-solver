@@ -1,6 +1,7 @@
-// M5 stage 11: production-shaped defect correction timing.
-// Build the validated hierarchy once, upload/allocate the complete MG-PCG state
-// once, warm it once, then reuse it for every FP64 outer correction.
+// M5 stage 13: production-shaped defect correction timing with the validated
+// explicit symmetric FP32 A3^-1 bottom representation.
+// Build the hierarchy once, upload/allocate the complete MG-PCG state once,
+// warm it once, then reuse it for every FP64 outer correction.
 #include "recursive_sa_local_l2_helpers.inc"
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
 #include "m5_p1_block6_setup.hpp"
@@ -29,6 +30,53 @@ std::vector<double> persist_to_double(const std::vector<float>& x) {
     std::vector<double> y(x.size(), 0.0);
     for (std::size_t i = 0U; i < x.size(); ++i) y[i] = static_cast<double>(x[i]);
     return y;
+}
+
+// Build A3^-1 from the already validated FP64 Cholesky. Symmetrize in FP64,
+// then cast each mirrored pair from the same float so the stored FP32 matrix is
+// bitwise symmetric. The returned layout is column-major for cuBLAS SGEMV.
+std::vector<float> persist_symmetric_inverse_col_major(const DenseCholesky& factor) {
+    const std::size_t n = factor.n;
+    std::vector<double> inverse(n * n, 0.0);
+    for (std::size_t j = 0U; j < n; ++j) {
+        Vec e(n, 0.0);
+        e[j] = 1.0;
+        const auto column = factor.solve(e);
+        for (std::size_t i = 0U; i < n; ++i) inverse[i * n + j] = column[i];
+    }
+    std::vector<float> out(n * n, 0.0f);
+    for (std::size_t i = 0U; i < n; ++i) {
+        for (std::size_t j = i; j < n; ++j) {
+            const float value = static_cast<float>(
+                0.5 * (inverse[i * n + j] + inverse[j * n + i]));
+            out[j * n + i] = value;
+            out[i * n + j] = value;
+        }
+    }
+    return out;
+}
+
+double persist_inverse_identity_relative_error(
+    const LocalBottomReference& bottom,
+    const std::vector<float>& inverse_col_major) {
+    const std::size_t n = bottom.factor.n;
+    if (inverse_col_major.size() != n * n) {
+        throw std::invalid_argument("persistent M5 bottom inverse size mismatch");
+    }
+    double d2 = 0.0;
+    for (std::size_t row = 0U; row < n; ++row) {
+        for (std::size_t col = 0U; col < n; ++col) {
+            double value = 0.0;
+            for (std::size_t k = 0U; k < n; ++k) {
+                value += bottom.values[row * n + k] *
+                         static_cast<double>(inverse_col_major[col * n + k]);
+            }
+            const double target = row == col ? 1.0 : 0.0;
+            const double d = value - target;
+            d2 += d * d;
+        }
+    }
+    return std::sqrt(d2 / static_cast<double>(n));
 }
 
 struct PersistStep {
@@ -148,11 +196,15 @@ int main(int argc, char** argv) {
             return transfer2.restrict_transpose(apply2(transfer2.prolong(x)));
         };
         const double bottom_oracle_error = bottom_local_oracle_error(bottom, apply3_nested);
+        const auto bottom_inverse_fp32 = persist_symmetric_inverse_col_major(bottom.factor);
+        const double bottom_inverse_identity_error =
+            persist_inverse_identity_relative_error(bottom, bottom_inverse_fp32);
         const auto hierarchy_stop = PersistClock::now();
 
         const bool hierarchy_ok = block1_oracle_error <= 1.0e-10 &&
                                   block2_oracle_error <= 1.0e-10 &&
-                                  bottom_oracle_error <= 1.0e-10;
+                                  bottom_oracle_error <= 1.0e-10 &&
+                                  bottom_inverse_identity_error <= 1.0e-4;
         const auto rhs = make_rhs(mesh);
         const double rhs_norm = norm(rhs);
         if (!(rhs_norm > 0.0)) throw std::runtime_error("persistent M5 RHS is zero");
@@ -161,7 +213,6 @@ int main(int argc, char** argv) {
             mesh, material, space0, omega0, lambda0, block_y);
         const auto a2_fp32 = m5_l2_setup::to_float(a2.fp64);
         const auto p2_fp32 = m5_l2_setup::to_float(p2.fp64);
-        const auto bottom_fp32 = persist_to_float(bottom.factor.lower);
 
         const auto gpu_setup_start = PersistClock::now();
         gfss::M5PersistentPcgStaging persistent(
@@ -171,7 +222,7 @@ int main(int argc, char** argv) {
             p1.forward_values_row_major, p1.transpose_column_offsets,
             p1.transpose_row_indices, p1.transpose_values_q_r_entry,
             a2_fp32, inverse2, lambda2, p2_fp32,
-            transfer2_tentative.coarse_dofs, bottom_fp32);
+            transfer2_tentative.coarse_dofs, bottom_inverse_fp32);
         const double gpu_hierarchy_setup_ms = std::chrono::duration<double, std::milli>(
             PersistClock::now() - gpu_setup_start).count();
 
@@ -251,6 +302,7 @@ int main(int argc, char** argv) {
                   << "problem=thin_plate mesh=64x64x8\n"
                   << "rhs=physical_uniform_z_xmax\n"
                   << "policy=frozen_5x1x1 inner_iterations=" << inner_iterations << '\n'
+                  << "L3_representation=explicit_symmetric_FP32_inverse_cuBLAS_SGEMV\n"
                   << "deep_hierarchy_uploaded_once=true\n"
                   << "pcg_vectors_allocated_once=true\n"
                   << "cublas_handles_created_once=true\n"
@@ -262,6 +314,7 @@ int main(int argc, char** argv) {
                   << "L1_block_vs_nested_relative_error=" << block1_oracle_error
                   << " L2_block_vs_nested_relative_error=" << block2_oracle_error
                   << " bottom_local_vs_nested_relative_error=" << bottom_oracle_error
+                  << " bottom_inverse_identity_relative_error=" << bottom_inverse_identity_error
                   << " hierarchy_oracle_accept=" << (hierarchy_ok ? "true" : "false") << '\n'
                   << std::fixed << std::setprecision(6)
                   << "hierarchy_cpu_setup_ms="
