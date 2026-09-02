@@ -83,8 +83,6 @@ target_include_directories(gfss_gpu_m5_l3_bottom_solve_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Compare the serial one-warp triangular bottom solve against an explicitly
-# symmetric FP32 inverse applied by cuBLAS and by one custom coalesced CTA.
 add_executable(gfss_gpu_m5_l3_inverse_apply_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l3_inverse_apply_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_bottom_inverse_staging.cu)
@@ -170,10 +168,6 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PRIVA
 set_target_properties(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# Production-shaped staging target: the complete deep hierarchy and PCG state
-# are uploaded/allocated once and reused by every FP64 defect correction. The
-# CUDA TU includes gpu_m5_fine_level.cu through the complete-cycle implementation,
-# so this executable deliberately does not link gfss_cuda_operator.
 add_executable(gfss_gpu_m5_vcycle_defect_persistent_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_defect_persistent_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_persistent_vpcg_staging.cu)
@@ -186,8 +180,6 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_persistent_bench PRIVATE
 set_target_properties(gfss_gpu_m5_vcycle_defect_persistent_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# CPU setup attribution for the frozen hierarchy. This deliberately separates
-# production-required construction from the expensive FP64 research oracles.
 add_executable(gfss_gpu_m5_hierarchy_setup_profile_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_setup_profile_bench.cpp)
 target_link_libraries(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
@@ -196,8 +188,6 @@ target_include_directories(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Exact setup optimization experiment: parallel aggregate-local work, cache the
-# final A1*P1 columns once, then use exact dense A2 for lambda2, P2 and A3.
 add_executable(gfss_gpu_m5_hierarchy_fast_setup_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_fast_setup_bench.cpp)
 target_link_libraries(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
@@ -206,9 +196,6 @@ target_include_directories(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# End-to-end integration of the exact fast hierarchy setup with the persistent
-# mixed-precision solver. Validation and warmup are reported but excluded from
-# the production-required timing total.
 add_executable(gfss_gpu_m5_fastsetup_persistent_solver_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_fastsetup_persistent_solver_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_persistent_vpcg_staging.cu)
@@ -220,3 +207,14 @@ target_include_directories(gfss_gpu_m5_fastsetup_persistent_solver_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_fastsetup_persistent_solver_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# Setup-only exact A1 materialization experiment. The temporary block-sparse A1
+# is built from the same exact off-diagonal blocks already needed for strength,
+# used to construct the deeper hierarchy, and discarded before GPU runtime.
+add_executable(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_materialized_a1_setup_bench.cpp)
+target_link_libraries(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
