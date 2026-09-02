@@ -9,6 +9,7 @@
 #include "m5_fast_hierarchy_setup.hpp"
 #include "m5_materialized_a1_setup.hpp"
 #include "m5_parallel_actual_a1_setup.hpp"
+#include "m5_symmetric_a2_setup.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -264,7 +265,7 @@ inline FastHierarchy build(
     out.stages.p1_payload_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
     stage = Clock::now();
-    auto a2 = m5_fast_setup::dense_a2_from_cached_applied(
+    auto a2 = m5_symmetric_a2::assemble_from_cached_applied(
         transfer1, block1, l2_basis, applied_l2_basis);
     out.stages.a2_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
