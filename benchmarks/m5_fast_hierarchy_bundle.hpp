@@ -22,21 +22,47 @@ namespace m5_fast_bundle {
 using Clock = std::chrono::steady_clock;
 
 struct StageTimes {
+    // Early L0/L1 construction. These used to be hidden inside production_setup_ms.
+    double graph0_aggregation_ms{0.0};
+    double tentative_a1_ms{0.0};
+    double fine_inverse_ms{0.0};
+    double lambda0_ms{0.0};
+    double l1_graph_candidates_ms{0.0};
+    double l1_block_metric_ms{0.0};
+    double lambda1_ms{0.0};
+    double p0_support_cache_ms{0.0};
+    double element_support_index_ms{0.0};
+
+    // Exact A1 construction and L1->L2 aggregation.
     double actual_a1_offdiagonal_ms{0.0};
     double actual_a1_local_accumulation_ms{0.0};
     double actual_a1_reduction_ms{0.0};
     int actual_a1_threads{1};
     std::size_t actual_a1_summed_thread_entries{0U};
     double materialized_a1_ms{0.0};
+    double strength1_ms{0.0};
+    double transfer1_ms{0.0};
+
+    // L2 and deeper materialization.
     double l2_basis_ms{0.0};
     double cached_a1p1_ms{0.0};
     double l2_metric_ms{0.0};
     double p1_payload_ms{0.0};
     double a2_ms{0.0};
     double lambda2_ms{0.0};
+    double transfer2_ms{0.0};
     double p2_ms{0.0};
     double bottom_ms{0.0};
     double final_payload_ms{0.0};
+
+    double sum_ms() const {
+        return graph0_aggregation_ms + tentative_a1_ms + fine_inverse_ms + lambda0_ms +
+               l1_graph_candidates_ms + l1_block_metric_ms + lambda1_ms +
+               p0_support_cache_ms + element_support_index_ms +
+               actual_a1_offdiagonal_ms + materialized_a1_ms + strength1_ms + transfer1_ms +
+               l2_basis_ms + cached_a1p1_ms + l2_metric_ms + p1_payload_ms + a2_ms +
+               lambda2_ms + transfer2_ms + p2_ms + bottom_ms + final_payload_ms;
+    }
 };
 
 struct OracleErrors {
@@ -126,32 +152,56 @@ inline FastHierarchy build(
 
     FastHierarchy out;
     const auto production_start = Clock::now();
+    auto stage = Clock::now();
 
     auto graph0 = gfss::build_structured_hex_nodal_graph_x0(mesh);
     auto space0 = gfss::build_elasticity_aggregation_coarse_space(
         std::move(graph0), {target_nodes, min_nodes, 1.0e-10});
+    out.stages.graph0_aggregation_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     const auto tentative_a1 = gfss::assemble_structured_hex_aggregation_galerkin(
         mesh, material, space0);
+    out.stages.tentative_a1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     const auto fine_inverse = build_fine_inverse_diagonal(mesh, material, space0);
+    out.stages.fine_inverse_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
     const Apply apply0 = [&](const Vec& x) { return apply_fine_clamped(mesh, material, x); };
+    stage = Clock::now();
     const double lambda0 = estimate_lambda_max(apply0, fine_inverse, 8U);
+    out.stages.lambda0_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
     const double omega0 = kSaDampingNumerator / lambda0;
     const FineSmoothedTransfer transfer0{mesh, material, space0, fine_inverse, omega0, m0};
     const Apply apply1 = [&](const Vec& x) {
         return transfer0.restrict_transpose(apply0(transfer0.prolong(x)));
     };
 
+    stage = Clock::now();
     const auto graph1_tentative = graph_from_variable_blocks(tentative_a1);
     const auto candidates1 = make_level1_candidates(space0);
+    out.stages.l1_graph_candidates_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     auto block1 = build_exact_l1_block_metric(
         mesh, material, space0, graph1_tentative, fine_inverse, omega0);
+    out.stages.l1_block_metric_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     const double lambda1 = estimate_lambda_max_l1_block(apply1, block1, 8U);
+    out.stages.lambda1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
     const double omega1 = kSaDampingNumerator / lambda1;
 
     double p0_support_ms = 0.0;
+    stage = Clock::now();
     const auto fine_supports = build_fine_basis_support_cache(
         mesh, material, space0, fine_inverse, omega0, p0_support_ms);
+    out.stages.p0_support_cache_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     const auto element_supports = build_element_support_index(mesh, fine_supports);
+    out.stages.element_support_index_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
     const auto parallel_a1 = m5_parallel_a1::assemble(
         mesh, material, fine_supports, element_supports);
@@ -162,15 +212,21 @@ inline FastHierarchy build(
     out.stages.actual_a1_threads = parallel_a1.threads;
     out.stages.actual_a1_summed_thread_entries = parallel_a1.summed_thread_entries;
 
-    auto stage = Clock::now();
+    stage = Clock::now();
     const auto temporary_a1 = m5_materialized_a1::build(block1, actual_a1_offdiagonal);
     out.stages.materialized_a1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
     out.temporary_a1_logical_bytes = temporary_a1.logical_bytes;
 
+    stage = Clock::now();
     const auto strength1 = build_combined_strength_graph(
         graph1_tentative, block1, actual_a1_offdiagonal, strength_threshold);
+    out.stages.strength1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
+    stage = Clock::now();
     auto transfer1 = build_candidate_transfer(
         strength1.graph, candidates1, target_nodes, min_nodes, 1.0e-10);
+    out.stages.transfer1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+
     const L1BlockSmoothedTransfer transfer1_nested{
         transfer1, apply1, block1, omega1, m1};
     const Apply apply2_nested = [&](const Vec& x) {
@@ -210,12 +266,14 @@ inline FastHierarchy build(
     };
     stage = Clock::now();
     const double lambda2 = estimate_lambda_max_l1_block(apply2_dense, block2, 8U);
-    const double omega2 = kSaDampingNumerator / lambda2;
     out.stages.lambda2_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+    const double omega2 = kSaDampingNumerator / lambda2;
 
+    stage = Clock::now();
     auto transfer2 = build_candidate_transfer(
         transfer1.coarse_graph, transfer1.coarse_candidates,
         target_nodes, min_nodes, 1.0e-10);
+    out.stages.transfer2_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
     stage = Clock::now();
     auto p2 = m5_fast_setup::dense_smoothed_p2_from_a2(
