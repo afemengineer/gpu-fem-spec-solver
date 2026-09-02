@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -67,20 +68,16 @@ double true_residual(const LocalBottomReference& bottom,
     return std::sqrt(d2 / std::max(b2, 1.0e-300));
 }
 
-// Build A^-1 from the already validated FP64 Cholesky. Symmetrize in FP64,
-// then cast each mirrored pair from one common float so the stored FP32 matrix
-// is bitwise symmetric. Return column-major layout for cuBLAS and the custom
-// coalesced kernel.
 std::vector<float> symmetric_inverse_col_major(const DenseCholesky& factor) {
     const std::size_t n = factor.n;
-    std::vector<double> inverse(n * n, 0.0); // row-major while assembling
+    std::vector<double> inverse(n * n, 0.0);
     for (std::size_t j = 0U; j < n; ++j) {
         Vec e(n, 0.0);
         e[j] = 1.0;
         const auto column = factor.solve(e);
         for (std::size_t i = 0U; i < n; ++i) inverse[i * n + j] = column[i];
     }
-    std::vector<float> out(n * n, 0.0f); // column-major
+    std::vector<float> out(n * n, 0.0f);
     for (std::size_t i = 0U; i < n; ++i) {
         for (std::size_t j = i; j < n; ++j) {
             const float v = static_cast<float>(
@@ -96,7 +93,7 @@ double inverse_identity_relative_error(const LocalBottomReference& bottom,
                                        const std::vector<float>& inverse_col_major) {
     const std::size_t n = bottom.factor.n;
     double d2 = 0.0;
-    double i2 = static_cast<double>(n);
+    const double i2 = static_cast<double>(n);
     for (std::size_t row = 0U; row < n; ++row) {
         for (std::size_t col = 0U; col < n; ++col) {
             double value = 0.0;
