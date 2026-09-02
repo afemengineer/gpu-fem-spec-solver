@@ -83,6 +83,19 @@ target_include_directories(gfss_gpu_m5_l3_bottom_solve_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
+# Compare the serial one-warp triangular bottom solve against an explicitly
+# symmetric FP32 inverse applied by cuBLAS and by one custom coalesced CTA.
+add_executable(gfss_gpu_m5_l3_inverse_apply_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l3_inverse_apply_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_bottom_inverse_staging.cu)
+target_link_libraries(gfss_gpu_m5_l3_inverse_apply_bench PRIVATE
+    gfss_cuda_operator gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_l3_inverse_apply_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_l3_inverse_apply_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
+
 add_executable(gfss_gpu_m5_l1_l2_transfer_representation_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_l2_transfer_representation_bench.cpp)
 target_link_libraries(gfss_gpu_m5_l1_l2_transfer_representation_bench PRIVATE
