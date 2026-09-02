@@ -67,6 +67,25 @@ inline Result assemble(
     const auto plan_start = Clock::now();
     std::vector<std::vector<std::uint64_t>> thread_keys(threads);
 
+    // Pre-count pair contributions per worker so each key vector reserves once.
+    // The previous implementation called reserve(keys.size() + pairs) for every
+    // element, forcing repeated near-exact growth and potentially copying an
+    // increasingly large vector thousands of times.
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t tid64 = 0; tid64 < static_cast<std::int64_t>(threads); ++tid64) {
+        const std::size_t tid = static_cast<std::size_t>(tid64);
+        const std::size_t begin = element_count * tid / threads;
+        const std::size_t end = element_count * (tid + 1U) / threads;
+        std::size_t contribution_count = 0U;
+        for (std::size_t element = begin; element < end; ++element) {
+            const std::size_t n = element_supports[element].size();
+            if (n >= 2U) contribution_count += n * (n - 1U) / 2U;
+        }
+        thread_keys[tid].reserve(contribution_count);
+    }
+
     // Use an explicit contiguous partition so the precomputed pair IDs and the
     // accumulation pass have identical element ownership independent of the
     // OpenMP runtime's schedule(static) implementation details.
@@ -81,8 +100,6 @@ inline Result assemble(
         for (std::size_t element = begin; element < end; ++element) {
             const auto& active = element_supports[element];
             if (active.size() < 2U) continue;
-            const std::size_t pairs = active.size() * (active.size() - 1U) / 2U;
-            keys.reserve(keys.size() + pairs);
             for (std::size_t ia = 0U; ia < active.size(); ++ia) {
                 for (std::size_t ib = ia + 1U; ib < active.size(); ++ib) {
                     keys.push_back(ordered_pair_key(active[ia], active[ib]));
