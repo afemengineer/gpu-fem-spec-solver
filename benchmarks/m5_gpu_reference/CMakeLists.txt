@@ -185,3 +185,13 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_persistent_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_vcycle_defect_persistent_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# CPU setup attribution for the frozen hierarchy. This deliberately separates
+# production-required construction from the expensive FP64 research oracles.
+add_executable(gfss_gpu_m5_hierarchy_setup_profile_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_setup_profile_bench.cpp)
+target_link_libraries(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_hierarchy_setup_profile_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
