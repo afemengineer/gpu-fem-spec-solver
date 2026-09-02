@@ -238,3 +238,13 @@ target_link_libraries(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
 target_include_directories(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Exact A1 candidate: preindex aggregate pairs so the element hot loop writes
+# compact thread-local block arrays instead of thread-local unordered_maps.
+add_executable(gfss_gpu_m5_a1_indexed_parallel_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_a1_indexed_parallel_bench.cpp)
+target_link_libraries(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
