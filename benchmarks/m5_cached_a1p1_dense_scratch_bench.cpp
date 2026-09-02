@@ -4,6 +4,7 @@
 // LocalColumns hash accumulator until this candidate is validated.
 #include "recursive_sa_local_l2_helpers.inc"
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
+#include "m5_l2_dense_setup.hpp"
 #include "m5_fast_hierarchy_setup.hpp"
 #include "m5_materialized_a1_setup.hpp"
 #include "m5_parallel_actual_a1_setup.hpp"
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
