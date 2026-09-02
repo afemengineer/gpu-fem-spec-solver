@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,8 +41,6 @@ __global__ void m5_bottom_inverse_matvec_kernel(
     const std::uint32_t i = threadIdx.x;
     if (i >= n) return;
     float sum = 0.0f;
-    // Column-major inverse means, for fixed j, adjacent output threads i read
-    // adjacent coefficients inverse[j*n+i]. This is coalesced across the warp.
     for (std::uint32_t j = 0U; j < n; ++j) {
         sum = fmaf(inverse_col_major[static_cast<std::size_t>(j) * n + i], rhs[j], sum);
     }
