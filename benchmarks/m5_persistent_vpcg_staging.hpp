@@ -22,8 +22,8 @@ struct M5PersistentPcgSolveResult {
 // Staging-only persistent deep-hierarchy MG-PCG context. The fine-level context
 // owns A0/P0 metadata and work vectors. This object uploads the L1/L2/L3 payload,
 // PCG vectors, cuBLAS handles and timing events exactly once, then solves many
-// correction equations by replacing only the fine RHS. It exists to measure the
-// production defect-correction wall time before the API is folded into gfss.
+// correction equations by replacing only the fine RHS. L3 is the validated
+// explicit symmetric FP32 inverse and is applied with cuBLAS SGEMV.
 class M5PersistentPcgStaging {
 public:
     M5PersistentPcgStaging(
@@ -44,7 +44,7 @@ public:
         double lambda2,
         const std::vector<float>& p2_dense_row_major,
         std::size_t l3_dofs,
-        const std::vector<float>& l3_cholesky_lower_row_major);
+        const std::vector<float>& l3_inverse_col_major);
     ~M5PersistentPcgStaging();
 
     M5PersistentPcgStaging(const M5PersistentPcgStaging&) = delete;
