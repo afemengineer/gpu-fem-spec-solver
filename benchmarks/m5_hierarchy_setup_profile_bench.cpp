@@ -18,7 +18,7 @@
 namespace {
 using ProfileClock = std::chrono::steady_clock;
 
-double elapsed_ms(ProfileClock::time_point a, ProfileClock::time_point b) {
+double profile_elapsed_ms(ProfileClock::time_point a, ProfileClock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
@@ -135,12 +135,12 @@ int main(int argc, char** argv) {
         auto graph0 = gfss::build_structured_hex_nodal_graph_x0(mesh);
         const auto space0 = gfss::build_elasticity_aggregation_coarse_space(
             std::move(graph0), {target_nodes, min_nodes, 1.0e-10});
-        t.graph_aggregation = elapsed_ms(stage, ProfileClock::now());
+        t.graph_aggregation = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto tentative_a1 = gfss::assemble_structured_hex_aggregation_galerkin(
             mesh, material, space0);
-        t.tentative_a1 = elapsed_ms(stage, ProfileClock::now());
+        t.tentative_a1 = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto fine_inverse = build_fine_inverse_diagonal(mesh, material, space0);
@@ -151,41 +151,41 @@ int main(int argc, char** argv) {
         const Apply apply1 = [&](const Vec& x) {
             return transfer0.restrict_transpose(apply0(transfer0.prolong(x)));
         };
-        t.fine_inverse_lambda0 = elapsed_ms(stage, ProfileClock::now());
+        t.fine_inverse_lambda0 = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto graph1_tentative = graph_from_variable_blocks(tentative_a1);
         const auto candidates1 = make_level1_candidates(space0);
-        t.l1_graph_candidates = elapsed_ms(stage, ProfileClock::now());
+        t.l1_graph_candidates = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto block1 = build_exact_l1_block_metric(
             mesh, material, space0, graph1_tentative, fine_inverse, omega0);
-        t.l1_block_metric = elapsed_ms(stage, ProfileClock::now());
+        t.l1_block_metric = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const double block1_oracle_error = audit_l1_block_metric(block1, apply1);
-        t.l1_block_oracle = elapsed_ms(stage, ProfileClock::now());
+        t.l1_block_oracle = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const double lambda1 = estimate_lambda_max_l1_block(apply1, block1, 8U);
         const double omega1 = kSaDampingNumerator / lambda1;
-        t.lambda1_estimate = elapsed_ms(stage, ProfileClock::now());
+        t.lambda1_estimate = profile_elapsed_ms(stage, ProfileClock::now());
 
         double internal_p0_support_ms = 0.0;
         stage = ProfileClock::now();
         const auto fine_supports = build_fine_basis_support_cache(
             mesh, material, space0, fine_inverse, omega0, internal_p0_support_ms);
-        t.p0_support_cache = elapsed_ms(stage, ProfileClock::now());
+        t.p0_support_cache = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto element_supports = build_element_support_index(mesh, fine_supports);
-        t.element_support_index = elapsed_ms(stage, ProfileClock::now());
+        t.element_support_index = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto actual_a1_offdiagonal = accumulate_combined_actual_a1_offdiagonal_blocks(
             mesh, material, fine_supports, element_supports);
-        t.actual_a1_offdiagonal = elapsed_ms(stage, ProfileClock::now());
+        t.actual_a1_offdiagonal = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto strength1 = build_combined_strength_graph(
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
         const Apply apply2 = [&](const Vec& x) {
             return transfer1.restrict_transpose(apply1(transfer1.prolong(x)));
         };
-        t.strength_transfer1 = elapsed_ms(stage, ProfileClock::now());
+        t.strength_transfer1 = profile_elapsed_ms(stage, ProfileClock::now());
 
         const auto local_a1_apply_lambda = [&](const LocalColumns& x) {
             return apply_local_a1_columns(mesh, material, fine_supports, element_supports, x);
@@ -208,33 +208,33 @@ int main(int argc, char** argv) {
         const auto l2_basis = build_smoothed_candidate_supports(
             transfer1_tentative, strength1.graph, block1,
             omega1, m1, local_a1_apply_lambda);
-        t.l2_basis = elapsed_ms(stage, ProfileClock::now());
+        t.l2_basis = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto block2 = build_metric_from_local_supports(
             transfer1_tentative, block1, l2_basis, local_a1_apply_lambda);
-        t.l2_block_metric = elapsed_ms(stage, ProfileClock::now());
+        t.l2_block_metric = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const double block2_oracle_error = audit_l1_block_metric(block2, apply2);
-        t.l2_block_oracle = elapsed_ms(stage, ProfileClock::now());
+        t.l2_block_oracle = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const double lambda2 = estimate_lambda_max_l1_block(apply2, block2, 8U);
         const double omega2 = kSaDampingNumerator / lambda2;
-        t.lambda2_estimate = elapsed_ms(stage, ProfileClock::now());
+        t.lambda2_estimate = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto p1 = m5_p1_setup::assemble_dual_order_block6(
             transfer1_tentative, block1, l2_basis);
         const auto inverse1 = m5_l2_setup::inverse_blocks_6x6_fp32(block1);
         const auto inverse2 = m5_l2_setup::inverse_blocks_6x6_fp32(block2);
-        t.p1_and_block_inverses = elapsed_ms(stage, ProfileClock::now());
+        t.p1_and_block_inverses = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto a2 = m5_l2_setup::assemble_dense_a2(
             transfer1_tentative, block1, l2_basis, local_a1_apply);
-        t.a2_dense = elapsed_ms(stage, ProfileClock::now());
+        t.a2_dense = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto transfer2_tentative = build_candidate_transfer(
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
             target_nodes, min_nodes, 1.0e-10);
         const L1BlockSmoothedTransfer transfer2{
             transfer2_tentative, apply2, block2, omega2, m2};
-        t.transfer2_tentative = elapsed_ms(stage, ProfileClock::now());
+        t.transfer2_tentative = profile_elapsed_ms(stage, ProfileClock::now());
 
         const auto local_a2_apply_lambda = [&](const LocalColumns& x) {
             return apply_local_a2_columns(x, l2_basis, block1, local_a1_apply_lambda);
@@ -254,35 +254,35 @@ int main(int argc, char** argv) {
         const auto bottom_basis = build_smoothed_candidate_supports(
             transfer2_tentative, transfer1_tentative.coarse_graph,
             block2, omega2, m2, local_a2_apply_lambda);
-        t.bottom_basis = elapsed_ms(stage, ProfileClock::now());
+        t.bottom_basis = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto p2 = m5_l2_setup::assemble_dense_p2(
             transfer2_tentative, block2, bottom_basis);
-        t.p2_dense = elapsed_ms(stage, ProfileClock::now());
+        t.p2_dense = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto bottom = build_local_bottom(
             transfer2_tentative, block2, bottom_basis, local_a2_apply);
-        t.bottom_assembly = elapsed_ms(stage, ProfileClock::now());
+        t.bottom_assembly = profile_elapsed_ms(stage, ProfileClock::now());
 
         const Apply apply3_nested = [&](const Vec& x) {
             return transfer2.restrict_transpose(apply2(transfer2.prolong(x)));
         };
         stage = ProfileClock::now();
         const double bottom_oracle_error = bottom_local_oracle_error(bottom, apply3_nested);
-        t.bottom_oracle = elapsed_ms(stage, ProfileClock::now());
+        t.bottom_oracle = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const auto bottom_inverse = symmetric_inverse_col_major(bottom.factor);
-        t.bottom_inverse = elapsed_ms(stage, ProfileClock::now());
+        t.bottom_inverse = profile_elapsed_ms(stage, ProfileClock::now());
 
         stage = ProfileClock::now();
         const double bottom_inverse_identity_error =
             inverse_identity_relative_error(bottom, bottom_inverse);
-        t.bottom_inverse_oracle = elapsed_ms(stage, ProfileClock::now());
+        t.bottom_inverse_oracle = profile_elapsed_ms(stage, ProfileClock::now());
 
-        const double total_ms = elapsed_ms(total_start, ProfileClock::now());
+        const double total_ms = profile_elapsed_ms(total_start, ProfileClock::now());
         const double oracle_ms = t.oracle_only();
         const double required_ms = total_ms - oracle_ms;
         const double profiled_ms = t.all_profiled();
