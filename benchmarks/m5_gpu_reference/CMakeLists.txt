@@ -218,3 +218,13 @@ target_link_libraries(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRIVATE
 target_include_directories(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Exact A1 setup microbenchmark: compare the established serial element
+# accumulation against thread-local OpenMP maps plus deterministic reduction.
+add_executable(gfss_gpu_m5_a1_offdiagonal_parallel_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_a1_offdiagonal_parallel_bench.cpp)
+target_link_libraries(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
