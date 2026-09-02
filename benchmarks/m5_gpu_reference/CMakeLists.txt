@@ -36,8 +36,6 @@ target_link_libraries(gfss_gpu_m5_fine_full_shell_bench PRIVATE
 target_include_directories(gfss_gpu_m5_fine_full_shell_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include)
 
-# Standalone CUDA TU for the first persistent L1 production slice. It includes
-# gpu_smoothed_aggregation.cu directly, so do not link gfss_cuda_operator.
 add_executable(gfss_gpu_m5_l1_block_smoother_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_block_smoother_bench.cu)
 target_link_libraries(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
@@ -49,8 +47,6 @@ target_include_directories(gfss_gpu_m5_l1_block_smoother_bench PRIVATE
 set_target_properties(gfss_gpu_m5_l1_block_smoother_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# Complete staged L1 shell. The CUDA implementation includes
-# gpu_smoothed_aggregation.cu directly, so keep it separate from the library.
 add_executable(gfss_gpu_m5_l1_full_shell_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_full_shell_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l1_full_shell_impl.cu)
@@ -79,8 +75,6 @@ target_include_directories(gfss_gpu_m5_l2_full_shell_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Final localized bottom level: FP64 setup/factor oracle with a persistent FP32
-# one-warp triangular solve on device.
 add_executable(gfss_gpu_m5_l3_bottom_solve_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_l3_bottom_solve_bench.cpp)
 target_link_libraries(gfss_gpu_m5_l3_bottom_solve_bench PRIVATE
@@ -115,10 +109,6 @@ target_include_directories(gfss_gpu_m5_l1_l2_block_transpose_soa_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# First complete persistent 4-level 5x1x1 V-cycle. The implementation includes
-# gpu_m5_fine_level.cu directly so A0/P0 metadata, fine work vectors and the
-# GoldSparse stencil remain in one context while recursive L1/L2/L3 execution
-# stays entirely device-resident. Do not link gfss_cuda_operator here.
 add_executable(gfss_gpu_m5_complete_vcycle_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_complete_vcycle_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_complete_vcycle_impl.cu)
@@ -131,10 +121,6 @@ target_include_directories(gfss_gpu_m5_complete_vcycle_bench PRIVATE
 set_target_properties(gfss_gpu_m5_complete_vcycle_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# First solver-level staging target. The CUDA TU includes the complete V-cycle
-# implementation and keeps PCG vectors, reductions and all preconditioner state
-# on device for a fixed iteration count. Only the final solution is returned to
-# the host for an independent FP64 true-residual verification.
 add_executable(gfss_gpu_m5_vcycle_pcg_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_impl.cu)
@@ -147,11 +133,6 @@ target_include_directories(gfss_gpu_m5_vcycle_pcg_bench PRIVATE
 set_target_properties(gfss_gpu_m5_vcycle_pcg_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# Numerical closure of the FP32 Krylov residual gap using the M4 architecture:
-# FP64 accumulated iterate/true defect outside, fixed-iteration FP32 MG-PCG
-# correction inside. This staging target currently reuses the fine GPU context
-# but reuploads the deep hierarchy for every outer correction; reported inner
-# solve time excludes that staging overhead.
 add_executable(gfss_gpu_m5_vcycle_defect_correction_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_defect_correction_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_impl.cu)
@@ -164,10 +145,6 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_correction_bench PRIVATE
 set_target_properties(gfss_gpu_m5_vcycle_defect_correction_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# One expensive hierarchy construction, then a fixed-inner-work sweep under the
-# validated FP64 defect-correction outer loop. Deep payload reupload remains in
-# the staging solver, but gpu_inner_solve_ms excludes it and therefore provides
-# the policy objective used before persistent-context refactoring.
 add_executable(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_defect_iteration_sweep_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_impl.cu)
@@ -178,4 +155,20 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PRIVA
     ${CMAKE_CURRENT_LIST_DIR}/../../src
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
+
+# Production-shaped staging target: the complete deep hierarchy and PCG state
+# are uploaded/allocated once and reused by every FP64 defect correction. The
+# CUDA TU includes gpu_m5_fine_level.cu through the complete-cycle implementation,
+# so this executable deliberately does not link gfss_cuda_operator.
+add_executable(gfss_gpu_m5_vcycle_defect_persistent_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_defect_persistent_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_persistent_vpcg_staging.cu)
+target_link_libraries(gfss_gpu_m5_vcycle_defect_persistent_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_vcycle_defect_persistent_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_vcycle_defect_persistent_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
