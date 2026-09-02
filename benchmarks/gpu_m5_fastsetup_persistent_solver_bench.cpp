@@ -175,10 +175,11 @@ int main(int argc, char** argv) {
         const double excluded_validation_and_warmup_ms =
             hierarchy.validation_oracle_ms + benchmark_warmup_ms;
 
-        std::cout << "GFSS M5 exact fast-setup + persistent solver integration\n"
+        std::cout << "GFSS M5 exact materialized-A1 fast-setup + persistent solver integration\n"
                   << "problem=thin_plate mesh=64x64x8\n"
                   << "rhs=physical_uniform_z_xmax\n"
-                  << "hierarchy_setup=parallel_L2_cached_A1P1_dense_A2_driven_L3\n"
+                  << "hierarchy_setup=temporary_exact_A1_parallel_L2_cached_A1P1_dense_A2_driven_L3\n"
+                  << "temporary_A1_policy=host_setup_only_discarded_before_runtime\n"
                   << "runtime=FP64_defect_FP32_MGPCG_5x1x1_inverse_L3\n"
                   << "production_timing_excludes=validation_oracles_and_benchmark_warmup\n"
                   << "inner_iterations=" << inner_iterations
@@ -189,6 +190,7 @@ int main(int argc, char** argv) {
                   << " L3_dofs=" << hierarchy.bottom.factor.n << '\n'
                   << std::scientific << std::setprecision(9)
                   << "L1_block_vs_nested_relative_error=" << hierarchy.oracle.l1_block
+                  << " A1_materialized_vs_nested_relative_error=" << hierarchy.oracle.a1_materialized
                   << " L2_block_vs_nested_relative_error=" << hierarchy.oracle.l2_block
                   << " A2_dense_vs_nested_relative_error=" << hierarchy.oracle.a2_dense
                   << " P2_dense_vs_factorized_relative_error=" << hierarchy.oracle.p2_dense
@@ -201,8 +203,11 @@ int main(int argc, char** argv) {
                   << " fine_gpu_context_setup_ms=" << fine_gpu_context_ms
                   << " deep_gpu_persistent_setup_ms=" << deep_gpu_setup_ms
                   << " benchmark_warmup_ms=" << benchmark_warmup_ms
-                  << " persistent_device_bytes=" << persistent.device_bytes_total() << '\n'
-                  << "setup_fast_L2_basis_ms=" << hierarchy.stages.l2_basis_ms
+                  << " persistent_device_bytes=" << persistent.device_bytes_total()
+                  << " temporary_A1_logical_bytes=" << hierarchy.temporary_a1_logical_bytes << '\n'
+                  << "setup_actual_A1_offdiagonal_ms=" << hierarchy.stages.actual_a1_offdiagonal_ms
+                  << " setup_temporary_A1_materialization_ms=" << hierarchy.stages.materialized_a1_ms
+                  << " setup_fast_L2_basis_ms=" << hierarchy.stages.l2_basis_ms
                   << " setup_cached_A1P1_ms=" << hierarchy.stages.cached_a1p1_ms
                   << " setup_L2_metric_ms=" << hierarchy.stages.l2_metric_ms
                   << " setup_P1_payload_ms=" << hierarchy.stages.p1_payload_ms
