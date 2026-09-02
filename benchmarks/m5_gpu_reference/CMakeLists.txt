@@ -163,3 +163,19 @@ target_include_directories(gfss_gpu_m5_vcycle_defect_correction_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_vcycle_defect_correction_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# One expensive hierarchy construction, then a fixed-inner-work sweep under the
+# validated FP64 defect-correction outer loop. Deep payload reupload remains in
+# the staging solver, but gpu_inner_solve_ms excludes it and therefore provides
+# the policy objective used before persistent-context refactoring.
+add_executable(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_defect_iteration_sweep_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_vcycle_pcg_impl.cu)
+target_link_libraries(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_vcycle_defect_iteration_sweep_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
