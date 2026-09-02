@@ -175,8 +175,6 @@ int main(int argc, char** argv) {
         const double gpu_hierarchy_setup_ms = std::chrono::duration<double, std::milli>(
             PersistClock::now() - gpu_setup_start).count();
 
-        // Warm-up is explicitly outside the production solve timer and happens
-        // only once for the persistent context.
         persistent.warmup(persist_to_float(rhs), inner_iterations);
 
         Vec x(rhs.size(), 0.0);
@@ -202,6 +200,15 @@ int main(int argc, char** argv) {
             accurate_residual_ms += std::chrono::duration<double, std::milli>(
                 PersistClock::now() - residual_start).count();
             outer_history.push_back(rel);
+
+            // For a linear system this is exactly the true residual of the
+            // previous correction equation, so no duplicate FP64 A*delta audit
+            // is needed in the production-shaped timing path.
+            if (!steps.empty() && steps.back().true_correction_rel == 0.0 &&
+                steps.back().outer_before > 0.0) {
+                steps.back().true_correction_rel = rel / steps.back().outer_before;
+            }
+
             if (!std::isfinite(rel)) throw std::runtime_error("persistent M5 FP64 residual non-finite");
             if (rel <= outer_tolerance) {
                 converged = true;
@@ -209,7 +216,6 @@ int main(int argc, char** argv) {
             }
             if (outer == max_outer) break;
 
-            const double residual_norm = norm(residual);
             const auto one_start = PersistClock::now();
             const auto correction = persistent.solve(persist_to_float(residual), inner_iterations);
             const double one_wall = std::chrono::duration<double, std::milli>(
@@ -228,13 +234,7 @@ int main(int argc, char** argv) {
             }
 
             const auto delta = persist_to_double(correction.solution_aos);
-            const auto adelta = apply0(delta);
-            Vec true_inner(residual.size(), 0.0);
-            for (std::size_t i = 0U; i < residual.size(); ++i) {
-                true_inner[i] = residual[i] - adelta[i];
-                x[i] += delta[i];
-            }
-            step.true_correction_rel = norm(true_inner) / std::max(residual_norm, 1.0e-300);
+            for (std::size_t i = 0U; i < x.size(); ++i) x[i] += delta[i];
             steps.push_back(step);
             gpu_inner_solve_ms += correction.solve_ms;
             correction_wall_ms += one_wall;
@@ -255,6 +255,7 @@ int main(int argc, char** argv) {
                   << "pcg_vectors_allocated_once=true\n"
                   << "cublas_handles_created_once=true\n"
                   << "warmup_once_outside_solve_timer=true\n"
+                  << "duplicate_FP64_correction_audit=false\n"
                   << "host_round_trip_per_outer=rhs_H2D_plus_solution_D2H\n"
                   << std::scientific << std::setprecision(9)
                   << "outer_tolerance=" << outer_tolerance << '\n'
