@@ -248,3 +248,13 @@ target_link_libraries(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
 target_include_directories(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Cached A1P1 candidate: keep the exact temporary A1 representation but replace
+# output LocalColumns hash probes with reusable per-worker dense node scratch.
+add_executable(gfss_gpu_m5_cached_a1p1_dense_scratch_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_cached_a1p1_dense_scratch_bench.cpp)
+target_link_libraries(gfss_gpu_m5_cached_a1p1_dense_scratch_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_cached_a1p1_dense_scratch_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
