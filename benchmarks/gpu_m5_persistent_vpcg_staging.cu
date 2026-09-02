@@ -1,9 +1,11 @@
-// M5 stage 11: persistent deep-hierarchy MG-PCG correction context.
+// M5 stage 13: persistent deep-hierarchy MG-PCG correction context with the
+// validated explicit symmetric FP32 A3^-1 bottom representation.
 //
 // This TU deliberately includes the validated complete V-cycle implementation
-// so the exact same A0/P0, block6 P1/P1T, dense A2/P2 and bottom kernels are
-// used. Unlike the stage-8 solve entry point, all deep hierarchy payloads,
-// cuBLAS handles, PCG vectors and timing events are allocated/uploaded once.
+// so the exact same A0/P0, block6 P1/P1T and dense A2/P2 kernels are used.
+// All deep hierarchy payloads, cuBLAS handles, PCG vectors and timing events are
+// allocated/uploaded once. L3 is applied by cuBLAS SGEMV rather than the serial
+// one-warp Cholesky forward/backward substitution.
 #include "m5_persistent_vpcg_staging.hpp"
 #include "gpu_m5_complete_vcycle_impl.cu"
 
@@ -149,7 +151,7 @@ struct M5PersistentPcgStaging::Impl {
     float* d_l2_correction{nullptr};
     float* d_l3_rhs{nullptr};
     float* d_l3_x{nullptr};
-    float* d_l3_lower{nullptr};
+    float* d_l3_inverse{nullptr};
 
     float* d_b{nullptr};
     float* d_solution{nullptr};
@@ -221,7 +223,7 @@ struct M5PersistentPcgStaging::Impl {
         double lambda2,
         const std::vector<float>& p2_dense_row_major,
         std::size_t l3_dofs_in,
-        const std::vector<float>& l3_cholesky_lower_row_major)
+        const std::vector<float>& l3_inverse_col_major)
         : mesh(mesh_in), block_y(block_y_in), nodes(nodes_in), ndof(ndof_in),
           l1_nodes(aggregate_count_in), l1_dofs(l1_dofs_in),
           l2_nodes(l2_nodes_in), l2_dofs(l2_nodes_in * 6U), l3_dofs(l3_dofs_in),
@@ -255,7 +257,7 @@ struct M5PersistentPcgStaging::Impl {
         if (a2_dense_row_major.size() != l2_dofs * l2_dofs ||
             l2_inverse_blocks_6x6.size() != l2_nodes * 36U ||
             p2_dense_row_major.size() != l2_dofs * l3_dofs ||
-            l3_cholesky_lower_row_major.size() != l3_dofs * l3_dofs) {
+            l3_inverse_col_major.size() != l3_dofs * l3_dofs) {
             throw std::invalid_argument("persistent M5 deep payload mismatch");
         }
         if (ndof > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
@@ -263,9 +265,9 @@ struct M5PersistentPcgStaging::Impl {
             l3_dofs > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
             throw std::invalid_argument("persistent M5 cuBLAS dimensions unsupported");
         }
-        for (std::size_t i = 0U; i < l3_dofs; ++i) {
-            if (!(l3_cholesky_lower_row_major[i * l3_dofs + i] > 0.0f)) {
-                throw std::invalid_argument("persistent M5 bottom diagonal invalid");
+        for (const float v : l3_inverse_col_major) {
+            if (!std::isfinite(v)) {
+                throw std::invalid_argument("persistent M5 bottom inverse contains non-finite value");
             }
         }
 
@@ -284,7 +286,7 @@ struct M5PersistentPcgStaging::Impl {
         const std::size_t a2_bytes = a2_dense_row_major.size() * sizeof(float);
         const std::size_t l2_inv_bytes = l2_inverse_blocks_6x6.size() * sizeof(float);
         const std::size_t p2_bytes = p2_dense_row_major.size() * sizeof(float);
-        const std::size_t bottom_bytes = l3_cholesky_lower_row_major.size() * sizeof(float);
+        const std::size_t bottom_bytes = l3_inverse_col_major.size() * sizeof(float);
 
         try {
 #define PERSIST_MALLOC(ptr, bytes, label) \
@@ -309,7 +311,7 @@ struct M5PersistentPcgStaging::Impl {
             PERSIST_MALLOC(d_l2_correction, l2_bytes, "cudaMalloc(M5 persistent L2 correction)");
             PERSIST_MALLOC(d_l3_rhs, l3_bytes, "cudaMalloc(M5 persistent L3 rhs)");
             PERSIST_MALLOC(d_l3_x, l3_bytes, "cudaMalloc(M5 persistent L3 x)");
-            PERSIST_MALLOC(d_l3_lower, bottom_bytes, "cudaMalloc(M5 persistent L3 factor)");
+            PERSIST_MALLOC(d_l3_inverse, bottom_bytes, "cudaMalloc(M5 persistent L3 inverse)");
             PERSIST_MALLOC(d_b, fine_bytes, "cudaMalloc(M5 persistent b)");
             PERSIST_MALLOC(d_solution, fine_bytes, "cudaMalloc(M5 persistent solution)");
             PERSIST_MALLOC(d_r, fine_bytes, "cudaMalloc(M5 persistent r)");
@@ -335,7 +337,7 @@ struct M5PersistentPcgStaging::Impl {
             PERSIST_COPY(d_a2, a2_dense_row_major, a2_bytes, "cudaMemcpy(M5 persistent A2)");
             PERSIST_COPY(d_l2_inv, l2_inverse_blocks_6x6, l2_inv_bytes, "cudaMemcpy(M5 persistent L2 inverse)");
             PERSIST_COPY(d_p2, p2_dense_row_major, p2_bytes, "cudaMemcpy(M5 persistent P2)");
-            PERSIST_COPY(d_l3_lower, l3_cholesky_lower_row_major, bottom_bytes, "cudaMemcpy(M5 persistent L3 factor)");
+            PERSIST_COPY(d_l3_inverse, l3_inverse_col_major, bottom_bytes, "cudaMemcpy(M5 persistent L3 inverse)");
 #undef PERSIST_COPY
 
             persist_check_cublas(cublasCreate(&prec_handle), "cublasCreate(M5 persistent preconditioner)");
@@ -386,7 +388,7 @@ struct M5PersistentPcgStaging::Impl {
         PERSIST_FREE(d_p1_tvals); PERSIST_FREE(d_a2); PERSIST_FREE(d_l2_inv);
         PERSIST_FREE(d_p2); PERSIST_FREE(d_l2_rhs); PERSIST_FREE(d_l2_x);
         PERSIST_FREE(d_l2_ax); PERSIST_FREE(d_l2_residual); PERSIST_FREE(d_l2_correction);
-        PERSIST_FREE(d_l3_rhs); PERSIST_FREE(d_l3_x); PERSIST_FREE(d_l3_lower);
+        PERSIST_FREE(d_l3_rhs); PERSIST_FREE(d_l3_x); PERSIST_FREE(d_l3_inverse);
         PERSIST_FREE(d_b); PERSIST_FREE(d_solution); PERSIST_FREE(d_r); PERSIST_FREE(d_z);
         PERSIST_FREE(d_p); PERSIST_FREE(d_ap); PERSIST_FREE(d_rz0); PERSIST_FREE(d_rz1);
         PERSIST_FREE(d_pap); PERSIST_FREE(d_recursive_norm); PERSIST_FREE(d_breakdown);
@@ -457,6 +459,15 @@ struct M5PersistentPcgStaging::Impl {
                              "cublasSgemv(M5 persistent P2)");
     }
 
+    void launch_l3_inverse(const float* rhs3, float* x3) {
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+        persist_check_cublas(cublasSgemv(prec_handle, CUBLAS_OP_N, n3, n3,
+                                         &alpha, d_l3_inverse, n3, rhs3, 1,
+                                         &beta, x3, 1),
+                             "cublasSgemv(M5 persistent L3 inverse)");
+    }
+
     void apply_preconditioner(const float* residual, float* z) {
         constexpr unsigned int vec_threads = 256U;
         constexpr unsigned int transfer_threads = 256U;
@@ -504,9 +515,7 @@ struct M5PersistentPcgStaging::Impl {
         check_cuda_pcg(cudaGetLastError(), "M5 persistent L2 residual launch");
         launch_p2t(d_l2_residual, d_l3_rhs);
 
-        m5_cv_bottom_solve_kernel<<<1U, 32U, l3_bytes>>>(
-            static_cast<std::uint32_t>(l3_dofs), d_l3_lower, d_l3_rhs, d_l3_x);
-        check_cuda_pcg(cudaGetLastError(), "M5 persistent bottom launch");
+        launch_l3_inverse(d_l3_rhs, d_l3_x);
 
         launch_p2(d_l3_x, d_l2_correction);
         m5_cv_vector_add_kernel<<<l2_vec_blocks, vec_threads>>>(l2_dofs, d_l2_correction, d_l2_x);
@@ -658,7 +667,7 @@ M5PersistentPcgStaging::M5PersistentPcgStaging(
     double lambda2,
     const std::vector<float>& p2_dense_row_major,
     std::size_t l3_dofs,
-    const std::vector<float>& l3_cholesky_lower_row_major) {
+    const std::vector<float>& l3_inverse_col_major) {
     if (!fine.impl_) throw std::runtime_error("persistent M5 fine context empty");
     auto& b = *fine.impl_;
     const std::size_t base_context_bytes = b.fine_vector_bytes + b.coarse_vector_bytes +
@@ -675,7 +684,7 @@ M5PersistentPcgStaging::M5PersistentPcgStaging(
         p1_transpose_column_offsets, p1_transpose_row_indices,
         p1_transpose_values_q_r_entry, a2_dense_row_major,
         l2_inverse_blocks_6x6, lambda2, p2_dense_row_major, l3_dofs,
-        l3_cholesky_lower_row_major);
+        l3_inverse_col_major);
 }
 
 M5PersistentPcgStaging::~M5PersistentPcgStaging() = default;
