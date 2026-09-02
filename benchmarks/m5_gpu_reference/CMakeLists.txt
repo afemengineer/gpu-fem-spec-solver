@@ -228,3 +228,13 @@ target_link_libraries(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
 target_include_directories(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Current production hierarchy profiler after all accepted setup optimizations.
+# Validation is disabled so this reports only required setup work.
+add_executable(gfss_gpu_m5_hierarchy_current_profile_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_current_profile_bench.cpp)
+target_link_libraries(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
