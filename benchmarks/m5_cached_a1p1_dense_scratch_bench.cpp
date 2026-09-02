@@ -7,6 +7,7 @@
 #include "m5_fast_hierarchy_setup.hpp"
 #include "m5_materialized_a1_setup.hpp"
 #include "m5_parallel_actual_a1_setup.hpp"
+#include "m5_symmetric_a2_setup.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -149,9 +150,9 @@ int main(int argc, char** argv) {
             scratch_metric.min_cholesky_pivot - reference_metric.min_cholesky_pivot) /
             std::max(std::abs(reference_metric.min_cholesky_pivot), 1.0e-300);
 
-        const auto reference_a2 = m5_fast_setup::dense_a2_from_cached_applied_symmetric(
+        const auto reference_a2 = m5_symmetric_a2::assemble_from_cached_applied(
             transfer1, block1, l2_basis, reference_applied);
-        const auto scratch_a2 = m5_fast_setup::dense_a2_from_cached_applied_symmetric(
+        const auto scratch_a2 = m5_symmetric_a2::assemble_from_cached_applied(
             transfer1, block1, l2_basis, scratch_applied);
         const double a2_error = dense_relative_error(scratch_a2.fp64, reference_a2.fp64);
 
