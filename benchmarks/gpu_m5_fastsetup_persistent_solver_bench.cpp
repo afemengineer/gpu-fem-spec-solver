@@ -81,6 +81,17 @@ int main(int argc, char** argv) {
         const double rhs_norm = norm(rhs);
         if (!(rhs_norm > 0.0)) throw std::runtime_error("M5 integrated RHS is zero");
 
+        std::cout << std::scientific << std::setprecision(12)
+                  << "persistent_scalar_preflight"
+                  << " m0=" << m0
+                  << " L2_nodes=" << hierarchy.transfer1.aggregates.size()
+                  << " L3_dofs=" << hierarchy.transfer2.coarse_dofs
+                  << " lambda1=" << hierarchy.lambda1
+                  << " lambda2=" << hierarchy.lambda2
+                  << " legacy_L3_limit_256="
+                  << (hierarchy.transfer2.coarse_dofs > 256U ? "exceeded" : "ok")
+                  << '\n';
+
         const auto fine_setup_start = EndClock::now();
         gfss::GpuM5FineLevelContext fine_context(
             mesh, material, hierarchy.space0,
