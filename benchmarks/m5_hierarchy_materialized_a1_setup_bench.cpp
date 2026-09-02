@@ -1,14 +1,45 @@
 // M5 stage 16: use the exact A1 block data already assembled for strength as a
 // temporary setup-only block-sparse operator. This avoids repeatedly evaluating
 // A1 = P0^T A0 P0 through the fine element path while constructing P1/A2.
-#define main gfss_m5_fast_setup_reference_main
-#include "m5_hierarchy_fast_setup_bench.cpp"
-#undef main
+#include "recursive_sa_local_l2_helpers.inc"
+#include "recursive_sa_actual_a1_strength_local_helpers.inc"
+#include "m5_p1_block6_setup.hpp"
+#include "m5_l2_dense_setup.hpp"
+#include "m5_fast_hierarchy_setup.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <iomanip>
+#include <iostream>
+#include <stdexcept>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
+
+using FastClock = m5_fast_setup::Clock;
+
+inline double fast_ms(FastClock::time_point a, FastClock::time_point b) {
+    return m5_fast_setup::elapsed_ms(a, b);
+}
+
+inline double rel_error(const Vec& a, const Vec& b) {
+    if (a.size() != b.size()) {
+        throw std::invalid_argument("materialized A1 oracle size mismatch");
+    }
+    Vec d(a.size(), 0.0);
+    for (std::size_t i = 0U; i < a.size(); ++i) d[i] = a[i] - b[i];
+    return norm(d) / std::max(norm(b), 1.0e-300);
+}
+
+using m5_fast_setup::apply_supports_parallel;
+using m5_fast_setup::build_smoothed_supports_parallel;
+using m5_fast_setup::dense_a2_from_cached_applied;
+using m5_fast_setup::dense_bottom_from_a2_p2;
+using m5_fast_setup::dense_smoothed_p2_from_a2;
+using m5_fast_setup::metric_from_cached_applied;
 
 struct MaterializedA1ColumnEntry {
     std::uint32_t row{0U};
@@ -238,7 +269,7 @@ int main(int argc, char** argv) {
         const double bottom_ms = fast_ms(bottom_start, FastClock::now());
 
         const auto final_payload_start = FastClock::now();
-        const auto bottom_inverse = fast_symmetric_inverse_col_major(bottom.factor);
+        const auto bottom_inverse = m5_fast_setup::symmetric_inverse_col_major(bottom.factor);
         const auto a2_fp32 = m5_l2_setup::to_float(a2.fp64);
         const auto p2_fp32 = m5_l2_setup::to_float(p2.fp64);
         const double final_payload_ms = fast_ms(final_payload_start, FastClock::now());
