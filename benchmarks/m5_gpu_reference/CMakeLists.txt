@@ -205,3 +205,18 @@ target_link_libraries(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
 target_include_directories(gfss_gpu_m5_hierarchy_fast_setup_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# End-to-end integration of the exact fast hierarchy setup with the persistent
+# mixed-precision solver. Validation and warmup are reported but excluded from
+# the production-required timing total.
+add_executable(gfss_gpu_m5_fastsetup_persistent_solver_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_fastsetup_persistent_solver_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_persistent_vpcg_staging.cu)
+target_link_libraries(gfss_gpu_m5_fastsetup_persistent_solver_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_fastsetup_persistent_solver_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_fastsetup_persistent_solver_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
