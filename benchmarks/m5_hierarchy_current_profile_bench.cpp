@@ -6,6 +6,8 @@
 #include "m5_fast_hierarchy_bundle.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
@@ -33,6 +35,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("invalid current hierarchy profile options");
         }
 
+        constexpr std::size_t m0 = 1U;
+        constexpr std::size_t power_iterations = 8U;
         const gfss::StructuredHexMesh mesh{64U, 64U, 8U, 1.0, 1.0, 0.125};
         const gfss::Material material{210.0e9, 0.30};
         const auto hierarchy = m5_fast_bundle::build(
@@ -88,7 +92,58 @@ int main(int argc, char** argv) {
         print_stage("A3_dense", s.bottom_ms, hierarchy.production_setup_ms);
         print_stage("final_FP32_payload", s.final_payload_ms, hierarchy.production_setup_ms);
 
-        return 0;
+        // Decision probe only: reconstruct the already-validated temporary A1 after
+        // the production timing has finished, then run the identical block-Jacobi
+        // power iteration on it. This extra work is deliberately excluded from
+        // production_required_setup_ms.
+        const auto fine_inverse = build_fine_inverse_diagonal(
+            mesh, material, hierarchy.space0);
+        double p0_support_probe_ms = 0.0;
+        const auto fine_supports = build_fine_basis_support_cache(
+            mesh, material, hierarchy.space0, fine_inverse,
+            hierarchy.omega0, p0_support_probe_ms);
+        const auto element_supports = build_element_support_index(mesh, fine_supports);
+        const auto parallel_a1 = m5_parallel_a1::assemble(
+            mesh, material, fine_supports, element_supports);
+        const auto temporary_a1 = m5_materialized_a1::build(
+            hierarchy.block1, parallel_a1.blocks);
+        const Apply apply1_materialized = [&](const Vec& x) {
+            return m5_materialized_a1::apply_vector(
+                temporary_a1, hierarchy.block1, x);
+        };
+
+        const auto candidate_start = std::chrono::steady_clock::now();
+        const double lambda1_materialized = estimate_lambda_max_l1_block(
+            apply1_materialized, hierarchy.block1, power_iterations);
+        const double materialized_lambda1_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - candidate_start).count();
+        const double lambda1_rel = std::abs(lambda1_materialized - hierarchy.lambda1) /
+            std::max(std::abs(hierarchy.lambda1), 1.0e-300);
+        const double omega1_materialized = kSaDampingNumerator / lambda1_materialized;
+        const double omega1_rel = std::abs(omega1_materialized - hierarchy.omega1) /
+            std::max(std::abs(hierarchy.omega1), 1.0e-300);
+        const bool lambda1_candidate_accept =
+            lambda1_rel <= 1.0e-10 && omega1_rel <= 1.0e-10;
+
+        std::cout << std::scientific << std::setprecision(12)
+                  << "lambda1_current_nested=" << hierarchy.lambda1
+                  << " lambda1_materialized_candidate=" << lambda1_materialized
+                  << " lambda1_relative_difference=" << lambda1_rel << '\n'
+                  << "omega1_current_nested=" << hierarchy.omega1
+                  << " omega1_materialized_candidate=" << omega1_materialized
+                  << " omega1_relative_difference=" << omega1_rel << '\n'
+                  << "lambda1_materialized_candidate_accept_1e-10="
+                  << (lambda1_candidate_accept ? "true" : "false") << '\n'
+                  << std::fixed << std::setprecision(6)
+                  << "lambda1_current_nested_ms=" << s.lambda1_ms
+                  << " lambda1_materialized_candidate_ms=" << materialized_lambda1_ms
+                  << " lambda1_candidate_speedup="
+                  << (materialized_lambda1_ms > 0.0
+                          ? s.lambda1_ms / materialized_lambda1_ms : 0.0) << '\n'
+                  << "decision_probe_excluded_from_production_profile=true\n";
+
+        return lambda1_candidate_accept ? 0 : 2;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n'
                   << "usage: gfss_gpu_m5_hierarchy_current_profile_bench "
