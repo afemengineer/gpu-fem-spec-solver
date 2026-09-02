@@ -188,11 +188,9 @@ inline FastHierarchy build(
         mesh, material, space0, graph1_tentative, fine_inverse, omega0);
     out.stages.l1_block_metric_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
-    stage = Clock::now();
-    const double lambda1 = estimate_lambda_max_l1_block(apply1, block1, 8U);
-    out.stages.lambda1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
-    const double omega1 = kSaDampingNumerator / lambda1;
-
+    // P0 support and exact A1 construction do not depend on lambda1. Build the
+    // exact temporary A1 first, then use that same verified Galerkin operator for
+    // the block-Jacobi spectral estimate instead of eight nested P0T*A0*P0 actions.
     double p0_support_ms = 0.0;
     stage = Clock::now();
     const auto fine_supports = build_fine_basis_support_cache(
@@ -216,6 +214,15 @@ inline FastHierarchy build(
     const auto temporary_a1 = m5_materialized_a1::build(block1, actual_a1_offdiagonal);
     out.stages.materialized_a1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
     out.temporary_a1_logical_bytes = temporary_a1.logical_bytes;
+
+    const Apply apply1_materialized = [&](const Vec& x) {
+        return m5_materialized_a1::apply_vector(temporary_a1, block1, x);
+    };
+    stage = Clock::now();
+    const double lambda1 = estimate_lambda_max_l1_block(
+        apply1_materialized, block1, 8U);
+    out.stages.lambda1_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
+    const double omega1 = kSaDampingNumerator / lambda1;
 
     stage = Clock::now();
     const auto strength1 = build_combined_strength_graph(
