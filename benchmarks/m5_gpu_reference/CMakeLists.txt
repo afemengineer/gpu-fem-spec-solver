@@ -208,9 +208,6 @@ target_include_directories(gfss_gpu_m5_fastsetup_persistent_solver_bench PRIVATE
 set_target_properties(gfss_gpu_m5_fastsetup_persistent_solver_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
 
-# Setup-only exact A1 materialization experiment. The temporary block-sparse A1
-# is built from the same exact off-diagonal blocks already needed for strength,
-# used to construct the deeper hierarchy, and discarded before GPU runtime.
 add_executable(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_materialized_a1_setup_bench.cpp)
 target_link_libraries(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRIVATE
@@ -219,8 +216,6 @@ target_include_directories(gfss_gpu_m5_hierarchy_materialized_a1_setup_bench PRI
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Exact A1 setup microbenchmark: compare the established serial element
-# accumulation against thread-local OpenMP maps plus deterministic reduction.
 add_executable(gfss_gpu_m5_a1_offdiagonal_parallel_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_a1_offdiagonal_parallel_bench.cpp)
 target_link_libraries(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
@@ -229,8 +224,6 @@ target_include_directories(gfss_gpu_m5_a1_offdiagonal_parallel_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Current production hierarchy profiler after all accepted setup optimizations.
-# Validation is disabled so this reports only required setup work.
 add_executable(gfss_gpu_m5_hierarchy_current_profile_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_hierarchy_current_profile_bench.cpp)
 target_link_libraries(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
@@ -239,8 +232,6 @@ target_include_directories(gfss_gpu_m5_hierarchy_current_profile_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Exact A1 candidate: preindex aggregate pairs so the element hot loop writes
-# compact thread-local block arrays instead of thread-local unordered_maps.
 add_executable(gfss_gpu_m5_a1_indexed_parallel_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_a1_indexed_parallel_bench.cpp)
 target_link_libraries(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
@@ -249,12 +240,20 @@ target_include_directories(gfss_gpu_m5_a1_indexed_parallel_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 
-# Cached A1P1 candidate: keep the exact temporary A1 representation but replace
-# output LocalColumns hash probes with reusable per-worker dense node scratch.
 add_executable(gfss_gpu_m5_cached_a1p1_dense_scratch_bench
     ${CMAKE_CURRENT_LIST_DIR}/../m5_cached_a1p1_dense_scratch_bench.cpp)
 target_link_libraries(gfss_gpu_m5_cached_a1p1_dense_scratch_bench PRIVATE
     gfss_multigrid_reference)
 target_include_directories(gfss_gpu_m5_cached_a1p1_dense_scratch_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Scaling decision probe: keep the exact dense A2 representation but skip
+# aggregate block pairs whose localized supports cannot intersect.
+add_executable(gfss_gpu_m5_a2_support_pruned_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_a2_support_pruned_bench.cpp)
+target_link_libraries(gfss_gpu_m5_a2_support_pruned_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_a2_support_pruned_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
