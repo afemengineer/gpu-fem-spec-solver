@@ -6,6 +6,7 @@
 // variable-rank block entries. No dense n^2 A2 payload is allocated.
 
 #include "m5_l2_dense_setup.hpp"
+#include "m5_fast_hierarchy_setup.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +32,7 @@ struct ExactSparseA2 {
     std::size_t n{0U};
     std::size_t nodes{0U};
     std::vector<BlockEntry> blocks;
+    std::vector<std::uint32_t> block_row_offsets;
     std::vector<std::uint32_t> row_offsets;
     std::vector<std::uint32_t> column_indices;
     std::vector<float> values_fp32;
@@ -42,7 +44,8 @@ struct ExactSparseA2 {
     double total_ms{0.0};
 
     std::size_t fp64_block_logical_bytes() const noexcept {
-        return blocks.size() * (2U * sizeof(std::uint32_t) + 36U * sizeof(double));
+        return blocks.size() * (2U * sizeof(std::uint32_t) + 36U * sizeof(double)) +
+               block_row_offsets.size() * sizeof(std::uint32_t);
     }
 
     std::size_t fp32_csr_logical_bytes() const noexcept {
@@ -186,6 +189,9 @@ inline ExactSparseA2 assemble_from_cached_applied(
 
     std::size_t directed_blocks = 0U;
     for (const auto& v : per_column) directed_blocks += v.size();
+    if (directed_blocks > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("sparse A2 block nnz exceeds uint32");
+    }
     out.blocks.reserve(directed_blocks);
     for (auto& v : per_column) {
         out.blocks.insert(out.blocks.end(),
@@ -196,6 +202,16 @@ inline ExactSparseA2 assemble_from_cached_applied(
         if (a.row_node != b.row_node) return a.row_node < b.row_node;
         return a.col_node < b.col_node;
     });
+    out.block_row_offsets.assign(out.nodes + 1U, 0U);
+    std::size_t block_cursor = 0U;
+    for (std::size_t row_node = 0U; row_node < out.nodes; ++row_node) {
+        out.block_row_offsets[row_node] = static_cast<std::uint32_t>(block_cursor);
+        while (block_cursor < out.blocks.size() &&
+               static_cast<std::size_t>(out.blocks[block_cursor].row_node) == row_node) {
+            ++block_cursor;
+        }
+    }
+    out.block_row_offsets[out.nodes] = static_cast<std::uint32_t>(out.blocks.size());
     out.block_assembly_ms = std::chrono::duration<double, std::milli>(
         Clock::now() - assembly_start).count();
 
@@ -253,20 +269,173 @@ inline std::vector<double> apply_fp64(
     const ExactSparseA2& a,
     const CandidateTransfer& transfer1,
     const std::vector<double>& x) {
-    if (x.size() != a.n) throw std::invalid_argument("sparse A2 apply size mismatch");
+    if (x.size() != a.n || transfer1.aggregates.size() != a.nodes ||
+        a.block_row_offsets.size() != a.nodes + 1U) {
+        throw std::invalid_argument("sparse A2 apply size/layout mismatch");
+    }
     std::vector<double> y(a.n, 0.0);
-    for (const auto& entry : a.blocks) {
-        const auto& ragg = transfer1.aggregates[entry.row_node];
-        const auto& cagg = transfer1.aggregates[entry.col_node];
-        for (std::size_t r = 0U; r < ragg.rank; ++r) {
-            double value = 0.0;
-            for (std::size_t c = 0U; c < cagg.rank; ++c) {
-                value += entry.values[r * kCandidates + c] * x[cagg.coarse_offset + c];
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t rn64 = 0; rn64 < static_cast<std::int64_t>(a.nodes); ++rn64) {
+        const std::size_t row_node = static_cast<std::size_t>(rn64);
+        const auto& ragg = transfer1.aggregates[row_node];
+        for (std::size_t bp = a.block_row_offsets[row_node];
+             bp < a.block_row_offsets[row_node + 1U]; ++bp) {
+            const auto& entry = a.blocks[bp];
+            const auto& cagg = transfer1.aggregates[entry.col_node];
+            for (std::size_t r = 0U; r < ragg.rank; ++r) {
+                double value = 0.0;
+                for (std::size_t c = 0U; c < cagg.rank; ++c) {
+                    value += entry.values[r * kCandidates + c] * x[cagg.coarse_offset + c];
+                }
+                y[ragg.coarse_offset + r] += value;
             }
-            y[ragg.coarse_offset + r] += value;
         }
     }
     return y;
+}
+
+inline void apply_matrix_fp64(
+    const ExactSparseA2& a,
+    const CandidateTransfer& transfer1,
+    const std::vector<double>& x,
+    std::size_t cols,
+    std::vector<double>& y) {
+    if (cols == 0U || x.size() != a.n * cols ||
+        transfer1.aggregates.size() != a.nodes ||
+        a.block_row_offsets.size() != a.nodes + 1U) {
+        throw std::invalid_argument("sparse A2 matrix apply size/layout mismatch");
+    }
+    y.assign(a.n * cols, 0.0);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t rn64 = 0; rn64 < static_cast<std::int64_t>(a.nodes); ++rn64) {
+        const std::size_t row_node = static_cast<std::size_t>(rn64);
+        const auto& ragg = transfer1.aggregates[row_node];
+        for (std::size_t bp = a.block_row_offsets[row_node];
+             bp < a.block_row_offsets[row_node + 1U]; ++bp) {
+            const auto& entry = a.blocks[bp];
+            const auto& cagg = transfer1.aggregates[entry.col_node];
+            for (std::size_t r = 0U; r < ragg.rank; ++r) {
+                double* dst = y.data() + (ragg.coarse_offset + r) * cols;
+                for (std::size_t c = 0U; c < cagg.rank; ++c) {
+                    const double coeff = entry.values[r * kCandidates + c];
+                    if (coeff == 0.0) continue;
+                    const double* src = x.data() + (cagg.coarse_offset + c) * cols;
+                    for (std::size_t q = 0U; q < cols; ++q) {
+                        dst[q] += coeff * src[q];
+                    }
+                }
+            }
+        }
+    }
+}
+
+inline m5_l2_setup::DenseP2 smoothed_p2_from_sparse_a2(
+    const ExactSparseA2& a,
+    const CandidateTransfer& transfer1,
+    const CandidateTransfer& transfer2,
+    const L1BlockMetric& block2,
+    double omega2) {
+    const auto start = Clock::now();
+    m5_l2_setup::DenseP2 p;
+    p.rows = block2.dofs();
+    p.cols = transfer2.coarse_dofs;
+    if (p.rows != a.n || p.cols == 0U) {
+        throw std::invalid_argument("sparse A2 P2 shape mismatch");
+    }
+    p.fp64.assign(p.rows * p.cols, 0.0);
+    for (const auto& aggregate : transfer2.aggregates) {
+        for (std::size_t row = 0U; row < aggregate.fine_dofs.size(); ++row) {
+            const std::size_t fine = aggregate.fine_dofs[row];
+            for (std::size_t q = 0U; q < aggregate.rank; ++q) {
+                p.fp64[fine * p.cols + aggregate.coarse_offset + q] =
+                    aggregate.q_values[row * aggregate.rank + q];
+            }
+        }
+    }
+    std::vector<double> ap;
+    std::vector<double> scaled;
+    apply_matrix_fp64(a, transfer1, p.fp64, p.cols, ap);
+    m5_fast_setup::block_solve_matrix(block2, ap, p.cols, scaled);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t i64 = 0; i64 < static_cast<std::int64_t>(p.fp64.size()); ++i64) {
+        const std::size_t i = static_cast<std::size_t>(i64);
+        p.fp64[i] -= omega2 * scaled[i];
+    }
+    p.assembly_ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    return p;
+}
+
+inline LocalBottomReference bottom_from_sparse_a2_p2(
+    const ExactSparseA2& a,
+    const CandidateTransfer& transfer1,
+    const m5_l2_setup::DenseP2& p2) {
+    const auto start = Clock::now();
+    if (p2.rows != a.n || p2.cols == 0U) {
+        throw std::invalid_argument("sparse bottom P2/A2 shape mismatch");
+    }
+    std::vector<double> ap;
+    apply_matrix_fp64(a, transfer1, p2.fp64, p2.cols, ap);
+    LocalBottomReference bottom;
+    bottom.values.assign(p2.cols * p2.cols, 0.0);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (std::int64_t i64 = 0; i64 < static_cast<std::int64_t>(p2.cols); ++i64) {
+        const std::size_t i = static_cast<std::size_t>(i64);
+        for (std::size_t j = 0U; j < p2.cols; ++j) {
+            double value = 0.0;
+            for (std::size_t r = 0U; r < p2.rows; ++r) {
+                value += p2.fp64[r * p2.cols + i] * ap[r * p2.cols + j];
+            }
+            bottom.values[i * p2.cols + j] = value;
+        }
+    }
+    double asym2 = 0.0;
+    double norm2 = 0.0;
+    for (std::size_t i = 0U; i < p2.cols; ++i) {
+        norm2 += bottom.values[i * p2.cols + i] * bottom.values[i * p2.cols + i];
+        for (std::size_t j = i + 1U; j < p2.cols; ++j) {
+            const double aij = bottom.values[i * p2.cols + j];
+            const double aji = bottom.values[j * p2.cols + i];
+            const double d = aij - aji;
+            asym2 += 2.0 * d * d;
+            norm2 += aij * aij + aji * aji;
+            const double sym = 0.5 * (aij + aji);
+            bottom.values[i * p2.cols + j] = sym;
+            bottom.values[j * p2.cols + i] = sym;
+        }
+    }
+    bottom.factor.n = p2.cols;
+    bottom.factor.symmetry_relative_defect = norm2 > 0.0 ? std::sqrt(asym2 / norm2) : 0.0;
+    bottom.factor.lower.assign(p2.cols * p2.cols, 0.0);
+    bottom.factor.min_pivot = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0U; i < p2.cols; ++i) {
+        for (std::size_t j = 0U; j <= i; ++j) {
+            double value = bottom.values[i * p2.cols + j];
+            for (std::size_t k = 0U; k < j; ++k) {
+                value -= bottom.factor.lower[i * p2.cols + k] *
+                         bottom.factor.lower[j * p2.cols + k];
+            }
+            if (i == j) {
+                if (!(value > 0.0) || !std::isfinite(value)) {
+                    throw std::runtime_error("sparse bottom lost SPD");
+                }
+                bottom.factor.min_pivot = std::min(bottom.factor.min_pivot, value);
+                bottom.factor.lower[i * p2.cols + j] = std::sqrt(value);
+            } else {
+                bottom.factor.lower[i * p2.cols + j] =
+                    value / bottom.factor.lower[j * p2.cols + j];
+            }
+        }
+    }
+    bottom.assembly_ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    return bottom;
 }
 
 }  // namespace m5_sparse_a2
