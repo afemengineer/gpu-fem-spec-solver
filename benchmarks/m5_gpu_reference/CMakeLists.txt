@@ -257,3 +257,13 @@ target_link_libraries(gfss_gpu_m5_a2_support_pruned_bench PRIVATE
 target_include_directories(gfss_gpu_m5_a2_support_pruned_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Scaling-aware runtime representation probe: build the current exact fast A2,
+# structurally compress it, and compare CSR against dense cuBLAS SGEMV.
+add_executable(gfss_gpu_m5_a2_runtime_representation_scaling_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_a2_runtime_representation_scaling_bench.cpp)
+target_link_libraries(gfss_gpu_m5_a2_runtime_representation_scaling_bench PRIVATE
+    gfss_cuda_operator gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_a2_runtime_representation_scaling_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
