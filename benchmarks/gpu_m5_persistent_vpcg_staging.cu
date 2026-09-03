@@ -236,7 +236,11 @@ struct M5PersistentPcgStaging::Impl {
           d_aggregates(aggregates), d_coordinates(coordinates), d_base_rhs(base_rhs),
           d_base_x(base_x), d_work0(work0), d_work1(work1), d_work2(work2),
           d_coarse(coarse), d_coarse_correction(coarse_correction) {
-        if (m0 == 0U || m0 > 8U || l2_nodes == 0U || l3_dofs == 0U || l3_dofs > 256U ||
+        // The former l3_dofs <= 256 restriction belonged to the retired
+        // single-block triangular bottom solve. Production L3 is an explicit
+        // dense inverse applied by cuBLAS SGEMV and is limited by cuBLAS int
+        // dimensions / payload sizes checked below, not CUDA block width.
+        if (m0 == 0U || m0 > 8U || l2_nodes == 0U || l3_dofs == 0U ||
             !(lambda1 > 0.0) || !(lambda2 > 0.0) || !std::isfinite(lambda1) ||
             !std::isfinite(lambda2)) {
             throw std::invalid_argument("persistent M5 scalar hierarchy options invalid");
