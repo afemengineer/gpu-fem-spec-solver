@@ -1,6 +1,5 @@
-// M5 scaling decision probe: compare three exact A2 setup paths from the same
-// cached L2 supports: all-pairs dense, support-pruned dense, and support-pruned
-// direct sparse assembly with no dense candidate payload.
+// M5 scaling decision probe: compare exact dense and sparse A2 construction,
+// then carry the sparse operator through lambda2, smoothed P2, and dense A3.
 #include "recursive_sa_local_l2_helpers.inc"
 #include "recursive_sa_actual_a1_strength_local_helpers.inc"
 #include "m5_l2_dense_setup.hpp"
@@ -46,9 +45,8 @@ double relative_error(const std::vector<double>& a,
     return std::sqrt(d2 / std::max(b2, 1.0e-300));
 }
 
-double dense_relative_error(const std::vector<double>& a,
-                            const std::vector<double>& b) {
-    return relative_error(a, b);
+double scalar_relative_error(double a, double b) {
+    return std::abs(a - b) / std::max(std::abs(b), 1.0e-300);
 }
 
 }  // namespace
@@ -124,6 +122,11 @@ int main(int argc, char** argv) {
             transfer1, strength1.graph, block1, omega1, m1, local_a1);
         const auto applied_l2_basis = m5_fast_setup::apply_supports_parallel(
             l2_basis, local_a1);
+        const auto block2 = m5_fast_setup::metric_from_cached_applied(
+            transfer1, block1, l2_basis, applied_l2_basis);
+        const auto transfer2 = build_candidate_transfer(
+            transfer1.coarse_graph, transfer1.coarse_candidates,
+            target_nodes, min_nodes, 1.0e-10);
         const double prerequisites_ms = std::chrono::duration<double, std::milli>(
             BenchClock::now() - prerequisites_start).count();
 
@@ -134,7 +137,7 @@ int main(int argc, char** argv) {
         const auto sparse = m5_sparse_a2::assemble_from_cached_applied(
             transfer1, block1, l2_basis, applied_l2_basis);
 
-        const double pruned_dense_error = dense_relative_error(
+        const double pruned_dense_error = relative_error(
             pruned_dense.dense.fp64, dense.fp64);
         double sparse_error = 0.0;
         for (const double phase : {0.31, 0.67, 1.13}) {
@@ -145,7 +148,46 @@ int main(int argc, char** argv) {
                     m5_sparse_a2::apply_fp64(sparse, transfer1, x),
                     m5_l2_setup::apply_dense_a2(dense, x)));
         }
-        const bool accept = pruned_dense_error <= 1.0e-12 && sparse_error <= 1.0e-12;
+
+        const Apply apply2_dense = [&](const Vec& x) {
+            return m5_l2_setup::apply_dense_a2(dense, x);
+        };
+        auto stage = BenchClock::now();
+        const double lambda2_dense = estimate_lambda_max_l1_block(
+            apply2_dense, block2, 8U);
+        const double lambda2_dense_ms = std::chrono::duration<double, std::milli>(
+            BenchClock::now() - stage).count();
+
+        const Apply apply2_sparse = [&](const Vec& x) {
+            return m5_sparse_a2::apply_fp64(sparse, transfer1, x);
+        };
+        stage = BenchClock::now();
+        const double lambda2_sparse = estimate_lambda_max_l1_block(
+            apply2_sparse, block2, 8U);
+        const double lambda2_sparse_ms = std::chrono::duration<double, std::milli>(
+            BenchClock::now() - stage).count();
+        const double lambda2_error = scalar_relative_error(lambda2_sparse, lambda2_dense);
+
+        const double omega2_dense = kSaDampingNumerator / lambda2_dense;
+        const double omega2_sparse = kSaDampingNumerator / lambda2_sparse;
+        const auto p2_dense = m5_fast_setup::dense_smoothed_p2_from_a2(
+            transfer2, block2, dense, omega2_dense);
+        const auto p2_sparse = m5_sparse_a2::smoothed_p2_from_sparse_a2(
+            sparse, transfer1, transfer2, block2, omega2_sparse);
+        const double p2_error = relative_error(p2_sparse.fp64, p2_dense.fp64);
+
+        const auto bottom_dense = m5_fast_setup::dense_bottom_from_a2_p2(
+            dense, p2_dense);
+        const auto bottom_sparse = m5_sparse_a2::bottom_from_sparse_a2_p2(
+            sparse, transfer1, p2_sparse);
+        const double bottom_error = relative_error(bottom_sparse.values, bottom_dense.values);
+        const double bottom_pivot_error = scalar_relative_error(
+            bottom_sparse.factor.min_pivot, bottom_dense.factor.min_pivot);
+
+        const bool accept = pruned_dense_error <= 1.0e-12 &&
+            sparse_error <= 1.0e-12 && lambda2_error <= 1.0e-12 &&
+            p2_error <= 1.0e-11 && bottom_error <= 1.0e-10 &&
+            bottom_pivot_error <= 1.0e-10;
 
         const std::size_t dense_fp64_bytes = dense.fp64.size() * sizeof(double);
         const std::size_t dense_fp32_bytes = dense.n * dense.n * sizeof(float);
@@ -161,26 +203,39 @@ int main(int argc, char** argv) {
             ? dense.assembly_ms / sparse.total_ms : 0.0;
         const double sparse_vs_pruned = sparse.total_ms > 0.0
             ? pruned_dense.total_ms / sparse.total_ms : 0.0;
+        const double dense_chain_ms = dense.assembly_ms + lambda2_dense_ms +
+            p2_dense.assembly_ms + bottom_dense.assembly_ms;
+        const double sparse_chain_ms = sparse.total_ms + lambda2_sparse_ms +
+            p2_sparse.assembly_ms + bottom_sparse.assembly_ms;
+        const double sparse_chain_speedup = sparse_chain_ms > 0.0
+            ? dense_chain_ms / sparse_chain_ms : 0.0;
 
-        std::cout << "GFSS M5 exact A2 setup representation decision probe\n"
+        std::cout << "GFSS M5 exact A2 sparse downstream decision probe\n"
                   << "problem=thin_plate mesh=" << nx << 'x' << ny << 'x' << nz
                   << " physical=1x1x0.125\n"
                   << "paths=all_pairs_dense,support_pruned_dense,support_pruned_direct_sparse\n"
                   << "fine_dofs=" << mesh.dof_count()
                   << " L1_dofs=" << space0.coarse_dofs
                   << " L2_dofs=" << dense.n
-                  << " L2_nodes=" << transfer1.aggregates.size() << '\n'
+                  << " L2_nodes=" << transfer1.aggregates.size()
+                  << " L3_dofs=" << transfer2.coarse_dofs << '\n'
                   << std::scientific << std::setprecision(12)
                   << "support_pruned_dense_relative_error=" << pruned_dense_error
                   << " direct_sparse_apply_relative_error=" << sparse_error
-                  << " oracle_accept_1e-12=" << (accept ? "true" : "false") << '\n'
+                  << " lambda2_relative_error=" << lambda2_error
+                  << " P2_relative_error=" << p2_error
+                  << " A3_relative_error=" << bottom_error
+                  << " A3_min_pivot_relative_error=" << bottom_pivot_error
+                  << " oracle_accept=" << (accept ? "true" : "false") << '\n'
+                  << "lambda2_dense=" << lambda2_dense
+                  << " lambda2_sparse=" << lambda2_sparse << '\n'
                   << std::fixed << std::setprecision(6)
                   << "all_upper_block_pairs=" << sparse.all_block_pairs
                   << " candidate_upper_block_pairs=" << sparse.candidate_upper_block_pairs
                   << " candidate_fraction=" << candidate_fraction
                   << " directed_sparse_blocks=" << sparse.blocks.size()
                   << " scalar_CSR_nnz=" << sparse.values_fp32.size() << '\n'
-                  << "prerequisites_to_cached_A1P1_ms=" << prerequisites_ms << '\n'
+                  << "prerequisites_to_cached_A1P1_metric_transfer2_ms=" << prerequisites_ms << '\n'
                   << "all_pairs_dense_A2_ms=" << dense.assembly_ms << '\n'
                   << "support_pruned_dense_index_ms=" << pruned_dense.support_index_ms
                   << " support_pruned_dense_assembly_ms=" << pruned_dense.assembly_ms
@@ -192,6 +247,15 @@ int main(int argc, char** argv) {
                   << " direct_sparse_total_ms=" << sparse.total_ms
                   << " speedup_dense_vs_direct_sparse=" << sparse_speedup
                   << " speedup_pruned_dense_vs_direct_sparse=" << sparse_vs_pruned << '\n'
+                  << "lambda2_dense_ms=" << lambda2_dense_ms
+                  << " lambda2_sparse_ms=" << lambda2_sparse_ms << '\n'
+                  << "P2_dense_ms=" << p2_dense.assembly_ms
+                  << " P2_sparse_ms=" << p2_sparse.assembly_ms << '\n'
+                  << "A3_dense_ms=" << bottom_dense.assembly_ms
+                  << " A3_sparse_ms=" << bottom_sparse.assembly_ms << '\n'
+                  << "dense_A2_to_A3_chain_ms=" << dense_chain_ms
+                  << " sparse_A2_to_A3_chain_ms=" << sparse_chain_ms
+                  << " sparse_chain_speedup=" << sparse_chain_speedup << '\n'
                   << "dense_FP64_host_bytes=" << dense_fp64_bytes
                   << " direct_sparse_FP64_block_bytes=" << sparse_fp64_block_bytes
                   << " sparse_over_dense_FP64_host_ratio="
