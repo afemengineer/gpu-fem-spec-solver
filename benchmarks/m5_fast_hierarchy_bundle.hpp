@@ -23,7 +23,6 @@ namespace m5_fast_bundle {
 using Clock = std::chrono::steady_clock;
 
 struct StageTimes {
-    // Early L0/L1 construction. These used to be hidden inside production_setup_ms.
     double graph0_aggregation_ms{0.0};
     double tentative_a1_ms{0.0};
     double fine_inverse_ms{0.0};
@@ -34,7 +33,6 @@ struct StageTimes {
     double p0_support_cache_ms{0.0};
     double element_support_index_ms{0.0};
 
-    // Exact A1 construction and L1->L2 aggregation.
     double actual_a1_offdiagonal_ms{0.0};
     double actual_a1_local_accumulation_ms{0.0};
     double actual_a1_reduction_ms{0.0};
@@ -44,7 +42,6 @@ struct StageTimes {
     double strength1_ms{0.0};
     double transfer1_ms{0.0};
 
-    // L2 and deeper materialization.
     double l2_basis_ms{0.0};
     double cached_a1p1_ms{0.0};
     double l2_metric_ms{0.0};
@@ -77,6 +74,17 @@ struct OracleErrors {
     bool accept{false};
 };
 
+struct A2SupportProbe {
+    bool ran{false};
+    std::size_t all_block_pairs{0U};
+    std::size_t candidate_block_pairs{0U};
+    double candidate_fraction{0.0};
+    double relative_error{0.0};
+    double support_index_ms{0.0};
+    double assembly_ms{0.0};
+    double total_ms{0.0};
+};
+
 struct FastHierarchy {
     gfss::ElasticityAggregationCoarseSpace space0;
     double lambda0{0.0};
@@ -102,6 +110,7 @@ struct FastHierarchy {
 
     StageTimes stages;
     OracleErrors oracle;
+    A2SupportProbe a2_support_probe;
     std::size_t temporary_a1_logical_bytes{0U};
     double production_setup_ms{0.0};
     double validation_oracle_ms{0.0};
@@ -112,6 +121,19 @@ inline double relative_error(const Vec& a, const Vec& b) {
     Vec d(a.size(), 0.0);
     for (std::size_t i = 0U; i < a.size(); ++i) d[i] = a[i] - b[i];
     return norm(d) / std::max(norm(b), 1.0e-300);
+}
+
+inline double dense_relative_error(const std::vector<double>& a,
+                                   const std::vector<double>& b) {
+    if (a.size() != b.size()) throw std::invalid_argument("fast hierarchy dense oracle size mismatch");
+    double d2 = 0.0;
+    double b2 = 0.0;
+    for (std::size_t i = 0U; i < a.size(); ++i) {
+        const double d = a[i] - b[i];
+        d2 += d * d;
+        b2 += b[i] * b[i];
+    }
+    return std::sqrt(d2 / std::max(b2, 1.0e-300));
 }
 
 inline double inverse_identity_relative_error(
@@ -142,7 +164,8 @@ inline FastHierarchy build(
     const gfss::Material& material,
     std::size_t target_nodes,
     std::size_t min_nodes,
-    bool run_validation_oracles = true) {
+    bool run_validation_oracles = true,
+    bool run_a2_support_probe = false) {
     if (target_nodes < 2U || min_nodes == 0U || min_nodes > target_nodes) {
         throw std::invalid_argument("invalid fast hierarchy aggregation options");
     }
@@ -189,9 +212,6 @@ inline FastHierarchy build(
         mesh, material, space0, graph1_tentative, fine_inverse, omega0);
     out.stages.l1_block_metric_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
-    // P0 support and exact A1 construction do not depend on lambda1. Build the
-    // exact temporary A1 first, then use that same verified Galerkin operator for
-    // the block-Jacobi spectral estimate instead of eight nested P0T*A0*P0 actions.
     double p0_support_ms = 0.0;
     stage = Clock::now();
     const auto fine_supports = build_fine_basis_support_cache(
@@ -298,7 +318,24 @@ inline FastHierarchy build(
     auto p2_fp32 = m5_l2_setup::to_float(p2.fp64);
     out.stages.final_payload_ms = m5_fast_setup::elapsed_ms(stage, Clock::now());
 
+    // Freeze the production setup time before any optional decision probes.
     out.production_setup_ms = m5_fast_setup::elapsed_ms(production_start, Clock::now());
+
+    if (run_a2_support_probe) {
+        const auto pruned = m5_symmetric_a2::assemble_from_cached_applied_support_pruned(
+            transfer1, block1, l2_basis, applied_l2_basis);
+        out.a2_support_probe.ran = true;
+        out.a2_support_probe.all_block_pairs = pruned.all_block_pairs;
+        out.a2_support_probe.candidate_block_pairs = pruned.candidate_block_pairs;
+        out.a2_support_probe.candidate_fraction = pruned.all_block_pairs > 0U
+            ? static_cast<double>(pruned.candidate_block_pairs) /
+              static_cast<double>(pruned.all_block_pairs)
+            : 0.0;
+        out.a2_support_probe.relative_error = dense_relative_error(pruned.dense.fp64, a2.fp64);
+        out.a2_support_probe.support_index_ms = pruned.support_index_ms;
+        out.a2_support_probe.assembly_ms = pruned.assembly_ms;
+        out.a2_support_probe.total_ms = pruned.total_ms;
+    }
 
     if (run_validation_oracles) {
         const auto validation_start = Clock::now();
