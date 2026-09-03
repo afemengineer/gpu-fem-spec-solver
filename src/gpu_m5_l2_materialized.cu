@@ -211,8 +211,6 @@ GpuM5L2DenseResult benchmark_m5_l2_dense_symmetric(
         const int n = static_cast<int>(rows);
         const float alpha = 1.0f;
         const float beta = 0.0f;
-        // values_row_major is the explicitly symmetrized A2. Interpreting the
-        // payload as column-major therefore exposes A2^T, which equals A2.
         check_cublas_l2(cublasSgemv(handle, CUBLAS_OP_N, n, n,
                                     &alpha, d_values, n, d_x, 1,
                                     &beta, d_y, 1),
@@ -265,3 +263,8 @@ GpuM5L2DenseResult benchmark_m5_l2_dense_symmetric(
 }
 
 }  // namespace gfss
+
+// Keep the block6 experimental kernel in the same CUDA translation unit as the
+// established L2 materialized kernels so existing M5 benchmark targets can call
+// it without changing the target source graph.
+#include "gpu_m5_l2_block6.cu"
