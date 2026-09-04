@@ -33,3 +33,14 @@ target_include_directories(gfss_gpu_m5_problem_generalization_suite_bench PRIVAT
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_problem_generalization_suite_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# Setup/reference probe for the scalable coarse architecture.  The validated
+# L0->L2 construction feeds an exact support-pruned sparse recursive tail; no
+# CUDA runtime changes are required for this decision benchmark.
+add_executable(gfss_gpu_m5_recursive_sparse_tail_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_recursive_sparse_tail_bench.cpp)
+target_link_libraries(gfss_gpu_m5_recursive_sparse_tail_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_gpu_m5_recursive_sparse_tail_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
