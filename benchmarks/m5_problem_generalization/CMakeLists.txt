@@ -74,3 +74,16 @@ target_include_directories(gfss_gpu_m5_recursive_production_solver_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_recursive_production_solver_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
+
+# First genuinely non-box topology gate.  Active parent-grid HEX8 elements are
+# compacted into orphan-style arbitrary coordinates/connectivity, so aggregation
+# sees only a generic NodalGraph3D.  The dense A1 solve is reference-only: this
+# target tests topology sensitivity before generalizing the production CUDA fine
+# operator/importer.
+add_executable(gfss_m5_active_hex_topology_reference_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_active_hex_topology_reference_bench.cpp)
+target_link_libraries(gfss_m5_active_hex_topology_reference_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_m5_active_hex_topology_reference_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
