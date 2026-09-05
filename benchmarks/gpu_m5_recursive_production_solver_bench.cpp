@@ -1,4 +1,4 @@
-// End-to-end M5 production-candidate probe: exact sparse recursive setup plus
+// End-to-end M5 production-candidate gate: exact sparse recursive setup plus
 // persistent FP32 recursive-tail MG-PCG inside the established FP64 defect loop.
 // The fixed-depth staging remains untouched and serves as the A/B baseline.
 #include "recursive_sa_local_l2_helpers.inc"
@@ -27,10 +27,20 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 
+enum class LoadKind {
+    UniformZ,
+    UniformY,
+    PatchZ,
+    Torsion,
+    CheckerboardZ,
+};
+
 struct CaseDef {
     const char* name;
+    const char* description;
     gfss::StructuredHexMesh mesh;
     gfss::Material material;
+    LoadKind load;
 };
 
 struct CorrectionStep {
@@ -56,18 +66,91 @@ double parse_tolerance(const char* text) {
     return value;
 }
 
-std::vector<double> uniform_z_xmax_rhs(const gfss::StructuredHexMesh& mesh) {
-    std::vector<double> rhs(static_cast<std::size_t>(mesh.dof_count()), 0.0);
-    const double count = static_cast<double>(mesh.ny + 1U) *
-                         static_cast<double>(mesh.nz + 1U);
-    const double value = -1.0 / count;
-    for (std::uint32_t k = 0U; k <= mesh.nz; ++k) {
-        for (std::uint32_t j = 0U; j <= mesh.ny; ++j) {
-            const auto node = mesh.node_index(mesh.nx, j, k);
-            rhs[static_cast<std::size_t>(3ULL * node + 2ULL)] = value;
-        }
+const char* load_name(LoadKind load) {
+    switch (load) {
+    case LoadKind::UniformZ: return "uniform_z_xmax";
+    case LoadKind::UniformY: return "uniform_y_xmax";
+    case LoadKind::PatchZ: return "central_patch_z_xmax";
+    case LoadKind::Torsion: return "torsion_xmax";
+    case LoadKind::CheckerboardZ: return "checkerboard_z_xmax";
     }
-    return rhs;
+    return "unknown";
+}
+
+std::vector<double> make_rhs(const CaseDef& test) {
+    const auto& mesh = test.mesh;
+    std::vector<double> rhs(static_cast<std::size_t>(mesh.dof_count()), 0.0);
+
+    if (test.load == LoadKind::UniformZ || test.load == LoadKind::UniformY) {
+        const double count = static_cast<double>(mesh.ny + 1U) *
+                             static_cast<double>(mesh.nz + 1U);
+        const double value = -1.0 / count;
+        const std::size_t component = test.load == LoadKind::UniformZ ? 2U : 1U;
+        for (std::uint32_t k = 0U; k <= mesh.nz; ++k) {
+            for (std::uint32_t j = 0U; j <= mesh.ny; ++j) {
+                const auto node = mesh.node_index(mesh.nx, j, k);
+                rhs[static_cast<std::size_t>(3ULL * node + component)] = value;
+            }
+        }
+        return rhs;
+    }
+
+    if (test.load == LoadKind::PatchZ) {
+        const std::uint32_t j0 = mesh.ny / 3U;
+        const std::uint32_t j1 = (2U * mesh.ny) / 3U;
+        const std::uint32_t k0 = mesh.nz / 3U;
+        const std::uint32_t k1 = (2U * mesh.nz) / 3U;
+        const std::uint64_t count =
+            static_cast<std::uint64_t>(j1 - j0 + 1U) *
+            static_cast<std::uint64_t>(k1 - k0 + 1U);
+        const double value = -1.0 / static_cast<double>(count);
+        for (std::uint32_t k = k0; k <= k1; ++k) {
+            for (std::uint32_t j = j0; j <= j1; ++j) {
+                const auto node = mesh.node_index(mesh.nx, j, k);
+                rhs[static_cast<std::size_t>(3ULL * node + 2ULL)] = value;
+            }
+        }
+        return rhs;
+    }
+
+    if (test.load == LoadKind::Torsion) {
+        double normalization = 0.0;
+        for (std::uint32_t k = 0U; k <= mesh.nz; ++k) {
+            const double z = static_cast<double>(k) / static_cast<double>(mesh.nz) - 0.5;
+            for (std::uint32_t j = 0U; j <= mesh.ny; ++j) {
+                const double y = static_cast<double>(j) / static_cast<double>(mesh.ny) - 0.5;
+                normalization += std::sqrt(y * y + z * z);
+            }
+        }
+        if (!(normalization > 0.0)) throw std::runtime_error("torsion load normalization is zero");
+        for (std::uint32_t k = 0U; k <= mesh.nz; ++k) {
+            const double z = static_cast<double>(k) / static_cast<double>(mesh.nz) - 0.5;
+            for (std::uint32_t j = 0U; j <= mesh.ny; ++j) {
+                const double y = static_cast<double>(j) / static_cast<double>(mesh.ny) - 0.5;
+                const auto node = mesh.node_index(mesh.nx, j, k);
+                const auto base = static_cast<std::size_t>(3ULL * node);
+                rhs[base + 1U] = -z / normalization;
+                rhs[base + 2U] = y / normalization;
+            }
+        }
+        return rhs;
+    }
+
+    if (test.load == LoadKind::CheckerboardZ) {
+        const double count = static_cast<double>(mesh.ny + 1U) *
+                             static_cast<double>(mesh.nz + 1U);
+        const double magnitude = 1.0 / count;
+        for (std::uint32_t k = 0U; k <= mesh.nz; ++k) {
+            for (std::uint32_t j = 0U; j <= mesh.ny; ++j) {
+                const auto node = mesh.node_index(mesh.nx, j, k);
+                const double sign = ((j + k) & 1U) == 0U ? 1.0 : -1.0;
+                rhs[static_cast<std::size_t>(3ULL * node + 2ULL)] = sign * magnitude;
+            }
+        }
+        return rhs;
+    }
+
+    throw std::runtime_error("unsupported recursive production load");
 }
 
 std::vector<float> to_float(const std::vector<double>& x) {
@@ -85,8 +168,22 @@ std::vector<double> to_double(const std::vector<float>& x) {
 std::vector<CaseDef> cases() {
     constexpr double E = 210.0e9;
     return {
-        {"thin_plate", {64U, 64U, 8U, 1.0, 1.0, 0.125}, {E, 0.30}},
-        {"baseline_cube", {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}},
+        {"baseline_cube", "isotropic cube, standard material, uniform transverse face load",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"slender_beam", "4:1:1 cantilever with near-isotropic cells",
+         {128U, 32U, 32U, 4.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"thin_plate", "thin 1:1:0.125 domain with near-isotropic cells",
+         {64U, 64U, 8U, 1.0, 1.0, 0.125}, {E, 0.30}, LoadKind::UniformZ},
+        {"anisotropic_cells", "unit cube with 4:1 element-size anisotropy",
+         {96U, 24U, 24U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::UniformZ},
+        {"near_incompressible", "cube with Poisson ratio 0.49",
+         {48U, 48U, 48U, 1.0, 1.0, 1.0}, {E, 0.49}, LoadKind::UniformZ},
+        {"localized_patch", "cube with concentrated central face patch load",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::PatchZ},
+        {"torsion_face", "cube with zero-net-force torsional face traction",
+         {64U, 64U, 64U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::Torsion},
+        {"checkerboard_face", "cube with high-spatial-frequency alternating face load",
+         {48U, 48U, 48U, 1.0, 1.0, 1.0}, {E, 0.30}, LoadKind::CheckerboardZ},
     };
 }
 
@@ -107,13 +204,15 @@ bool run_case(const CaseDef& test,
     std::string stage = "recursive_hierarchy_build";
     try {
         std::cout << "case=" << test.name << '\n'
+                  << "description=" << test.description << '\n'
                   << "mesh=" << test.mesh.nx << 'x' << test.mesh.ny << 'x' << test.mesh.nz
                   << " physical=" << test.mesh.lx << 'x' << test.mesh.ly << 'x' << test.mesh.lz
                   << " elements=" << test.mesh.element_count()
                   << " dofs=" << test.mesh.dof_count() << '\n'
                   << std::scientific << std::setprecision(9)
                   << "material_E=" << test.material.young_modulus
-                  << " poisson=" << test.material.poisson_ratio << '\n';
+                  << " poisson=" << test.material.poisson_ratio << '\n'
+                  << "load=" << load_name(test.load) << '\n';
 
         const auto hierarchy_start = Clock::now();
         auto graph0 = gfss::build_structured_hex_nodal_graph_x0(test.mesh);
@@ -174,7 +273,9 @@ bool run_case(const CaseDef& test,
         const double direct_sparse_a2_ms = std::chrono::duration<double, std::milli>(
             Clock::now() - a2_start).count();
 
-        // Exact top-level sparse-vs-nested oracle before ownership moves into tail.
+        // Validation-only top-level oracle.  Its cost is measured explicitly and
+        // excluded from recursive_hierarchy_setup_ms_excluding_top_A2_oracle.
+        const auto a2_oracle_start = Clock::now();
         const L1BlockSmoothedTransfer transfer1_nested{
             transfer1, apply1, block1, omega1, m1};
         const Apply apply2_nested = [&](const Vec& x) {
@@ -194,12 +295,16 @@ bool run_case(const CaseDef& test,
             for (std::size_t i = 0U; i < diff.size(); ++i) diff[i] = sparse_y[i] - nested_y[i];
             a2_oracle = std::max(a2_oracle, norm(diff) / std::max(norm(nested_y), 1.0e-300));
         }
+        const double top_a2_oracle_ms = std::chrono::duration<double, std::milli>(
+            Clock::now() - a2_oracle_start).count();
 
         auto tail = m5_recursive_tail::build(
             std::move(transfer1), std::move(block2), std::move(sparse_a2),
             2U, target_nodes, min_nodes, dense_bottom_threshold, 12U);
-        const double hierarchy_setup_ms = std::chrono::duration<double, std::milli>(
-            Clock::now() - hierarchy_start).count();
+        const double hierarchy_including_top_oracle_ms =
+            std::chrono::duration<double, std::milli>(Clock::now() - hierarchy_start).count();
+        const double hierarchy_excluding_top_oracle_ms =
+            hierarchy_including_top_oracle_ms - top_a2_oracle_ms;
 
         stage = "gpu_payload_export";
         const auto export_start = Clock::now();
@@ -251,7 +356,7 @@ bool run_case(const CaseDef& test,
             std::cout << '\n';
         }
 
-        const auto rhs = uniform_z_xmax_rhs(test.mesh);
+        const auto rhs = make_rhs(test);
         const double rhs_norm = norm(rhs);
         if (!(rhs_norm > 0.0)) throw std::runtime_error("recursive production RHS is zero");
 
@@ -369,9 +474,13 @@ bool run_case(const CaseDef& test,
                   << "outer_corrections=" << steps.size()
                   << " total_inner_iterations=" << total_inner_iterations
                   << " total_L0_operator_applies=" << total_l0_operator_applies << '\n'
-                  << "recursive_hierarchy_setup_ms=" << hierarchy_setup_ms
-                  << " direct_sparse_A2_ms=" << direct_sparse_a2_ms
-                  << " recursive_tail_setup_ms=" << tail.total_ms
+                  << "recursive_hierarchy_setup_ms_including_validation="
+                  << hierarchy_including_top_oracle_ms
+                  << " recursive_hierarchy_setup_ms_excluding_top_A2_oracle="
+                  << hierarchy_excluding_top_oracle_ms
+                  << " top_A2_validation_oracle_ms=" << top_a2_oracle_ms << '\n'
+                  << "direct_sparse_A2_ms=" << direct_sparse_a2_ms
+                  << " recursive_tail_setup_ms_including_bottom_oracle=" << tail.total_ms
                   << " gpu_payload_export_ms=" << payload_export_ms
                   << " fine_gpu_context_setup_ms=" << fine_gpu_setup_ms
                   << " recursive_gpu_persistent_setup_ms=" << persistent_setup_ms << '\n'
@@ -396,7 +505,7 @@ bool run_case(const CaseDef& test,
 
 int main(int argc, char** argv) {
     try {
-        const std::string selector = argc > 1 ? argv[1] : "thin_plate";
+        const std::string selector = argc > 1 ? argv[1] : "all";
         const double outer_tolerance = argc > 2 ? parse_tolerance(argv[2]) : 1.0e-6;
         const std::size_t inner_iterations = argc > 3
             ? parse_size(argv[3], "inner iterations") : 5U;
@@ -412,7 +521,7 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("invalid recursive production-solver options");
         }
 
-        std::cout << "GFSS M5 recursive production solver probe\n"
+        std::cout << "GFSS M5 recursive production solver generalization gate\n"
                   << "policy=FP64_defect_plus_5step_FP32_recursive_MGPCG\n"
                   << "setup=direct_sparse_A2_plus_recursive_sparse_tail\n"
                   << "no_per_case_tuning=true\n"
@@ -437,7 +546,11 @@ int main(int argc, char** argv) {
             }
         }
         if (selected == 0U) {
-            throw std::invalid_argument("selector must be thin_plate, baseline_cube, or all");
+            std::cerr << "error: unknown suite case '" << selector << "'\n"
+                      << "available cases:";
+            for (const auto& test : cases()) std::cerr << ' ' << test.name;
+            std::cerr << " all\n";
+            return 1;
         }
         const std::size_t failed = selected - passed;
         std::cout << "\n========================================\n"
@@ -448,7 +561,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << '\n'
                   << "usage: gfss_gpu_m5_recursive_production_solver_bench "
-                  << "[thin_plate|baseline_cube|all [outer_tol=1e-6 [inner=5 [max_outer=12 "
+                  << "[all|case [outer_tol=1e-6 [inner=5 [max_outer=12 "
                   << "[block_y=4 [target_nodes=12 [min_nodes=4 [bottom=512]]]]]]]]\n";
         return 1;
     }
