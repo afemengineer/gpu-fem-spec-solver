@@ -99,3 +99,15 @@ target_link_libraries(gfss_m5_active_hex_topology_diagnostic_bench PRIVATE
 target_include_directories(gfss_m5_active_hex_topology_diagnostic_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# PCG relevance test for the topology diagnostic.  The shallow exact two-grid
+# cycle is used as a preconditioner and compared with tentative-transfer and
+# Jacobi controls.  This distinguishes harmless Euclidean residual amplification
+# inside a Galerkin cycle from genuine Krylov/preconditioner degradation.
+add_executable(gfss_m5_active_hex_topology_pcg_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_active_hex_topology_pcg_bench.cpp)
+target_link_libraries(gfss_m5_active_hex_topology_pcg_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_m5_active_hex_topology_pcg_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
