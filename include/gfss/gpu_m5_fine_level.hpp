@@ -50,7 +50,7 @@ struct GpuM5FineFullShellResult {
     std::vector<float> coarse_residual;
     std::vector<float> fine_correction_aos;
     GpuM5FineFullShellTiming median_timing;
-    GpuM5FullShellTiming best_timing;
+    GpuM5FineFullShellTiming best_timing;
     std::size_t smoother_degree{0};
     std::size_t transfer_smoothing_steps{0};
     std::size_t fine_operator_applies{0};
