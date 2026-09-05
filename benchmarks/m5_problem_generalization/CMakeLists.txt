@@ -87,3 +87,15 @@ target_link_libraries(gfss_m5_active_hex_topology_reference_bench PRIVATE
 target_include_directories(gfss_m5_active_hex_topology_reference_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Diagnostic companion to the frozen topology gate.  It decomposes the residual
+# after pre-smoothing, exact coarse correction, and post-smoothing; compares the
+# one-step smoothed transfer with the raw tentative transfer; and reports the
+# geometry of any locally rank-deficient aggregates without changing parameters.
+add_executable(gfss_m5_active_hex_topology_diagnostic_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../m5_active_hex_topology_diagnostic_bench.cpp)
+target_link_libraries(gfss_m5_active_hex_topology_diagnostic_bench PRIVATE
+    gfss_multigrid_reference)
+target_include_directories(gfss_m5_active_hex_topology_diagnostic_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
