@@ -61,32 +61,15 @@ struct PcgResult {
     std::vector<double> history;
 };
 
-PcgResult pcg(const Apply& apply,
-              const Vec& b,
-              const Precondition& precondition,
-              double tolerance,
-              std::size_t max_iterations) {
-    if (!(tolerance > 0.0) || !(tolerance < 1.0) || max_iterations == 0U) {
-        throw std::invalid_argument("topology PCG options invalid");
-    }
-    const double bnorm = norm(b);
-    if (!(bnorm > 0.0)) throw std::runtime_error("topology PCG RHS is zero");
-
-    Vec x(b.size(), 0.0);
-    Vec r = b;
-    clamp(*reinterpret_cast<const ActiveHexDomain*>(nullptr), r);
-    // The line above is never executed: retained only to prevent accidental use
-    // of an unconstrained residual helper in future refactors.
-    (void)x;
-    throw std::runtime_error("internal topology PCG placeholder reached");
-}
-
 PcgResult pcg_domain(const ActiveHexDomain& domain,
                      const Apply& apply,
                      const Vec& b,
                      const Precondition& precondition,
                      double tolerance,
                      std::size_t max_iterations) {
+    if (!(tolerance > 0.0) || !(tolerance < 1.0) || max_iterations == 0U) {
+        throw std::invalid_argument("topology PCG options invalid");
+    }
     const double bnorm = norm(b);
     if (!(bnorm > 0.0)) throw std::runtime_error("topology PCG RHS is zero");
 
@@ -134,7 +117,7 @@ PcgResult pcg_domain(const ActiveHexDomain& domain,
         clamp(domain, r);
         out.iterations = it + 1U;
 
-        // Recompute the true residual every iteration.  These systems are only
+        // Recompute the true residual every iteration. These systems are only
         // a few thousand DOFs, so the diagnostic should not depend on recursive
         // residual drift.
         const auto ax_true = apply(x);
@@ -172,11 +155,7 @@ PcgResult pcg_domain(const ActiveHexDomain& domain,
         rz = rz_new;
     }
 
-    if (out.history.empty()) {
-        out.final_true_relative_residual = 1.0;
-    } else {
-        out.final_true_relative_residual = out.history.back();
-    }
+    out.final_true_relative_residual = out.history.empty() ? 1.0 : out.history.back();
     return out;
 }
 
@@ -243,7 +222,9 @@ void run_pcg_case(const CaseDef& test,
         domain, apply, b, jacobi_m, tolerance, max_iterations);
 
     std::size_t rank_deficient = 0U;
-    for (const auto& aggregate : space.aggregates) rank_deficient += aggregate.rank < 6U ? 1U : 0U;
+    for (const auto& aggregate : space.aggregates) {
+        rank_deficient += aggregate.rank < 6U ? 1U : 0U;
+    }
     const double rb_error = gfss::audit_elasticity_rigid_body_reproduction(space);
     const double pt_error = adjoint_error(smoothed);
 
