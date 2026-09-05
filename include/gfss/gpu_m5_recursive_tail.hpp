@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -47,11 +48,38 @@ struct M5RecursiveTailGpuResult {
     std::vector<std::string> runtime_representations;
 };
 
-// Persistent FP32 recursive V-cycle for algebraic coarse levels.  All payloads
-// are uploaded once.  Each non-bottom level performs one weighted block-Jacobi
-// pre step from zero, one recursive coarse correction, and one weighted
-// block-Jacobi post step.  The final level is solved by an explicit symmetric
-// FP32 inverse through cuBLAS SGEMV.
+// Persistent device-resident form of the validated recursive coarse-tail
+// V-cycle.  This is the production-integration surface: callers can supply an
+// already resident top-level coarse RHS and receive the correction into an
+// already resident output vector without host synchronization or transfers.
+class M5RecursiveTailGpuContext {
+public:
+    M5RecursiveTailGpuContext(
+        const std::vector<M5RecursiveTailLevelPayload>& levels,
+        const std::vector<float>& bottom_inverse_col_major);
+    ~M5RecursiveTailGpuContext();
+
+    M5RecursiveTailGpuContext(const M5RecursiveTailGpuContext&) = delete;
+    M5RecursiveTailGpuContext& operator=(const M5RecursiveTailGpuContext&) = delete;
+    M5RecursiveTailGpuContext(M5RecursiveTailGpuContext&&) noexcept;
+    M5RecursiveTailGpuContext& operator=(M5RecursiveTailGpuContext&&) noexcept;
+
+    // d_rhs and d_x are device pointers with top_dofs() FP32 entries.
+    void apply_device(const float* d_rhs, float* d_x);
+
+    std::size_t top_dofs() const noexcept;
+    std::size_t device_bytes() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+// Persistent FP32 recursive V-cycle benchmark for algebraic coarse levels. All
+// payloads are uploaded once. Each non-bottom level performs one weighted
+// block-Jacobi pre step from zero, one recursive coarse correction, and one
+// weighted block-Jacobi post step. The final level is solved by an explicit
+// symmetric FP32 inverse through cuBLAS SGEMV.
 M5RecursiveTailGpuResult benchmark_m5_recursive_tail_vcycle(
     const std::vector<M5RecursiveTailLevelPayload>& levels,
     const std::vector<float>& bottom_inverse_col_major,
