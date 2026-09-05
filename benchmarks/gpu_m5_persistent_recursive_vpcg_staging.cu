@@ -114,7 +114,6 @@ struct M5PersistentRecursivePcgStaging::Impl {
     float weight1{0.0f};
     std::vector<float> l0_weights;
 
-    // Borrowed persistent fine-level allocations.
     std::uint32_t* d_aggregate_offsets{nullptr};
     std::uint32_t* d_aggregate_nodes{nullptr};
     DeviceAggregateM5* d_aggregates{nullptr};
@@ -127,7 +126,6 @@ struct M5PersistentRecursivePcgStaging::Impl {
     float* d_coarse{nullptr};
     float* d_coarse_correction{nullptr};
 
-    // Owned L1/P1 staging.
     float* d_l1_inv{nullptr};
     float* d_l1_ax{nullptr};
     float* d_l1_residual{nullptr};
@@ -141,7 +139,6 @@ struct M5PersistentRecursivePcgStaging::Impl {
     float* d_l2_rhs{nullptr};
     float* d_l2_x{nullptr};
 
-    // Owned fine PCG state.
     float* d_b{nullptr};
     float* d_solution{nullptr};
     float* d_r{nullptr};
@@ -436,8 +433,6 @@ struct M5PersistentRecursivePcgStaging::Impl {
             d_p1_tvals, d_l1_padded, d_l2_rhs);
         check_cuda_pcg(cudaGetLastError(), "M5 recursive persistent P1T launch");
 
-        // The only algorithmic replacement relative to M5PersistentPcgStaging:
-        // solve the complete L2->...->bottom V-cycle recursively on device.
         tail->apply_device(d_l2_rhs, d_l2_x);
 
         m5_cv_p1_forward_kernel<<<p1_blocks, transfer_threads>>>(
@@ -486,7 +481,7 @@ struct M5PersistentRecursivePcgStaging::Impl {
                        "cudaMemsetAsync(M5 recursive persistent breakdown)");
 
         apply_preconditioner(d_r, d_z);
-        recursive_persist_cublas(cublasSdot(dot_handle, n0, d_r, 1, d_z, 1, d_rz0),
+        recursive_persist_cublas(cublasSdot(dot_handle, n0, d_r, 1, d_z, 1, rz_old),
                                  "cublasSdot(M5 recursive persistent initial rz)");
         check_cuda_pcg(cudaMemcpyAsync(d_p, d_z, fine_bytes, cudaMemcpyDeviceToDevice),
                        "cudaMemcpyAsync(M5 recursive persistent initial p)");
@@ -501,10 +496,10 @@ struct M5PersistentRecursivePcgStaging::Impl {
             if (it + 1U == iterations) break;
 
             apply_preconditioner(d_r, d_z);
-            recursive_persist_cublas(cublasSdot(dot_handle, n0, d_r, 1, d_z, 1, d_rz1),
+            recursive_persist_cublas(cublasSdot(dot_handle, n0, d_r, 1, d_z, 1, rz_new),
                                      "cublasSdot(M5 recursive persistent rz new)");
             recursive_persist_update_p_kernel<<<fine_vec_blocks, vec_threads>>>(
-                ndof, d_rz1, rz_old, d_z, d_p, d_breakdown);
+                ndof, rz_new, rz_old, d_z, d_p, d_breakdown);
             check_cuda_pcg(cudaGetLastError(), "M5 recursive persistent p update launch");
             std::swap(rz_old, rz_new);
         }
