@@ -44,3 +44,17 @@ target_link_libraries(gfss_gpu_m5_recursive_sparse_tail_bench PRIVATE
 target_include_directories(gfss_gpu_m5_recursive_sparse_tail_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
+
+# Persistent recursive coarse-tail runtime validation.  The host builder exports
+# each non-bottom operator as dense FP32 or structural scalar CSR FP32 according
+# to the measured/memory crossover policy, and exports both P and P^T as CSR.
+add_executable(gfss_gpu_m5_recursive_tail_gpu_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_recursive_tail_gpu_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_recursive_tail.cu)
+target_link_libraries(gfss_gpu_m5_recursive_tail_gpu_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_recursive_tail_gpu_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_recursive_tail_gpu_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
