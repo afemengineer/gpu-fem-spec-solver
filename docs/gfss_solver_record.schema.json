@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gfss.local/schema/gfss_solver_record_v1.json",
+  "title": "GFSS Solver Record v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "run_id",
+    "benchmark",
+    "solver",
+    "problem",
+    "correctness",
+    "timing",
+    "memory"
+  ],
+  "properties": {
+    "schema": {"const": "gfss.solver_record"},
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "timestamp_utc": {"type": ["string", "null"]},
+    "benchmark": {"type": "string", "minLength": 1},
+    "git": {
+      "type": "object",
+      "properties": {
+        "commit": {"type": ["string", "null"]},
+        "branch": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "solver": {
+      "type": "object",
+      "required": ["family", "variant"],
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "variant": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "problem": {
+      "type": "object",
+      "required": ["name", "fine_dofs"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "fine_dofs": {"type": "integer", "minimum": 1},
+        "discretization": {"type": ["string", "null"]},
+        "material": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "correctness": {
+      "type": "object",
+      "required": ["converged", "target_relative_residual", "true_relative_residual"],
+      "properties": {
+        "converged": {"type": "boolean"},
+        "target_relative_residual": {"type": "number", "exclusiveMinimum": 0},
+        "initial_true_relative_residual": {"type": ["number", "null"], "minimum": 0},
+        "true_relative_residual": {"type": "number", "minimum": 0},
+        "breakdown": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "timing": {
+      "type": "object",
+      "required": ["setup_ms", "solve_ms", "total_ms"],
+      "properties": {
+        "setup_ms": {"type": "number", "minimum": 0},
+        "solve_ms": {"type": "number", "minimum": 0},
+        "total_ms": {"type": "number", "minimum": 0},
+        "truth_ms": {"type": ["number", "null"], "minimum": 0},
+        "rhs_reuse_count": {"type": ["integer", "null"], "minimum": 1},
+        "amortized_ms": {"type": ["number", "null"], "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "memory": {
+      "type": "object",
+      "required": ["peak_bytes_per_dof"],
+      "properties": {
+        "kind": {"enum": ["measured", "modeled", "mixed"]},
+        "peak_solver_bytes": {"type": ["integer", "number", "null"], "minimum": 0},
+        "peak_bytes_per_dof": {"type": "number", "exclusiveMinimum": 0},
+        "capacity_mdof_per_gib": {"type": ["number", "null"], "exclusiveMinimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "work": {
+      "type": "object",
+      "properties": {
+        "fine_operator_applies": {"type": ["integer", "null"], "minimum": 0},
+        "coarse_operator_applies": {"type": ["integer", "null"], "minimum": 0},
+        "prolongation_applies": {"type": ["integer", "null"], "minimum": 0},
+        "restriction_applies": {"type": ["integer", "null"], "minimum": 0},
+        "dot_products": {"type": ["integer", "null"], "minimum": 0},
+        "axpy_like_ops": {"type": ["integer", "null"], "minimum": 0},
+        "true_residual_audits": {"type": ["integer", "null"], "minimum": 0},
+        "fine_matvec_equivalents": {"type": ["number", "null"], "minimum": 0},
+        "useful_flops": {"type": ["number", "null"], "minimum": 0},
+        "estimated_bytes_moved": {"type": ["number", "null"], "minimum": 0},
+        "arithmetic_intensity_flop_per_byte": {"type": ["number", "null"], "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "derived": {"type": "object", "additionalProperties": true},
+    "hardware": {"type": "object", "additionalProperties": true},
+    "profiler": {"type": "object", "additionalProperties": true},
+    "extra": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

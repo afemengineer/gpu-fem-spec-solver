@@ -38,19 +38,24 @@ struct GpuPcgResult {
     std::size_t explicit_device_bytes{0};
 };
 
-// Persistent-device PCG for the structured-Q1 elasticity problem.
-// The x=0 face is zero-Dirichlet, matching the trusted CPU reference. The
-// matrix-free matvec uses the GoldSparse structured stencil and Jacobi uses
-// the exact diagonal of the same clamped operator. FP32 recursive residuals
-// drive PCG, but convergence is accepted only after a non-mutating r=b-Ax
-// audit of the current solution. Failed audits do not overwrite the recursive
-// residual or restart the Krylov search direction. Setup/allocation/H2D/D2H
-// are excluded from solve_ms; PCG kernels, cuBLAS reductions, residual audits,
-// and their host synchronization are included.
+// Standalone audited Jacobi-PCG from a zero initial guess.
 GpuPcgResult solve_pcg_cuda_gold_sparse_x0(
     const StructuredHexMesh& mesh,
     const Material& material,
     const std::vector<float>& rhs,
+    double relative_tolerance = 1.0e-5,
+    std::size_t max_iterations = 2000,
+    int block_y = 4);
+
+// M5 experimental path: identical fine-grid GoldSparse Jacobi-PCG, but starts
+// from an explicit interleaved FP32 initial guess. This lets a geometric coarse
+// correction seed the fine Krylov solve without changing its audited stopping
+// criterion. Allocation, stencil upload, H2D and D2H remain outside solve_ms.
+GpuPcgResult solve_pcg_cuda_gold_sparse_seeded_x0(
+    const StructuredHexMesh& mesh,
+    const Material& material,
+    const std::vector<float>& rhs,
+    const std::vector<float>& initial_guess,
     double relative_tolerance = 1.0e-5,
     std::size_t max_iterations = 2000,
     int block_y = 4);

@@ -86,6 +86,17 @@ else()
     message(WARNING "OpenMP was not found; CPU parallel operator will fall back to serial")
 endif()
 
+add_library(gfss_multigrid_reference STATIC
+    src/multigrid_reference.cpp
+    src/multilevel_reference.cpp
+    src/aggregation_coarse_space.cpp
+    src/aggregation_coarse_operator.cpp
+    src/aggregation_two_grid_reference.cpp
+    src/smoothed_aggregation_reference.cpp
+)
+target_link_libraries(gfss_multigrid_reference PUBLIC gfss_core)
+target_include_directories(gfss_multigrid_reference PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 set(GFSS_APP_SOURCES src/main.cpp)
 
 if(GFSS_ENABLE_CUDA)
@@ -97,9 +108,6 @@ if(GFSS_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         find_package(CUDAToolkit REQUIRED)
 
-        # CMake 3.24 plus newer CUDA toolkits can discover the toolkit while
-        # failing to expose CUDA::cublas. Derive the Windows import library
-        # directly from the nvcc path that CMake already validated.
         if(WIN32)
             get_filename_component(GFSS_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
             get_filename_component(GFSS_CUDA_ROOT "${GFSS_CUDA_BIN_DIR}" DIRECTORY)
@@ -142,6 +150,8 @@ if(GFSS_HAS_CUDA)
         src/gpu_gold_3d.cu
         src/gpu_gold_sparse.cu
         src/gpu_pcg_persistent.cu
+        src/gpu_pcg_seeded.cu
+        src/gpu_smoothed_aggregation.cu
     )
     target_link_libraries(gfss_cuda_operator PUBLIC gfss_core "${GFSS_CUBLAS_LIBRARY}")
     target_include_directories(gfss_cuda_operator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -176,6 +186,33 @@ if(GFSS_HAS_CUDA)
     add_executable(gfss_gpu_adaptive_problem_suite_bench benchmarks/gpu_adaptive_problem_suite_bench.cpp)
     target_link_libraries(gfss_gpu_adaptive_problem_suite_bench PRIVATE gfss_mixed_refinement)
     target_include_directories(gfss_gpu_adaptive_problem_suite_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_two_level_seed_bench benchmarks/gpu_two_level_seed_bench.cpp)
+    target_link_libraries(gfss_gpu_two_level_seed_bench PRIVATE gfss_cuda_operator gfss_core)
+    target_include_directories(gfss_gpu_two_level_seed_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_two_level_consistency_bench benchmarks/gpu_two_level_consistency_bench.cpp)
+    target_link_libraries(gfss_gpu_two_level_consistency_bench PRIVATE gfss_cuda_operator gfss_core)
+    target_include_directories(gfss_gpu_two_level_consistency_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    add_executable(gfss_gpu_smoothed_coarse_action_bench benchmarks/gpu_smoothed_coarse_action_bench.cpp)
+    target_link_libraries(gfss_gpu_smoothed_coarse_action_bench PRIVATE gfss_cuda_operator gfss_multigrid_reference)
+    target_include_directories(gfss_gpu_smoothed_coarse_action_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # Standalone CUDA TU for the fixed-budget coarse-PCG experiment. It includes
+    # the smoothed-aggregation implementation directly so the benchmark can keep
+    # Krylov vectors device-resident without exposing internal device pointers in
+    # the production library. Do not link gfss_cuda_operator here: that would
+    # duplicate the included CUDA symbols.
+    add_executable(gfss_gpu_inexact_coarse_sweep_bench benchmarks/gpu_inexact_coarse_sweep_bench.cu)
+    target_link_libraries(gfss_gpu_inexact_coarse_sweep_bench PRIVATE
+        gfss_multigrid_reference
+        "${GFSS_CUBLAS_LIBRARY}")
+    target_include_directories(gfss_gpu_inexact_coarse_sweep_bench PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set_target_properties(gfss_gpu_inexact_coarse_sweep_bench PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF)
 else()
     target_compile_definitions(gfss PRIVATE GFSS_HAS_CUDA=0)
 endif()
@@ -195,6 +232,30 @@ target_include_directories(gfss_cpu_gold_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_executable(gfss_cpu_gold_profile benchmarks/cpu_gold_profile.cpp)
 target_link_libraries(gfss_cpu_gold_profile PRIVATE gfss_core)
 target_include_directories(gfss_cpu_gold_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_geometric_vcycle_reference_bench benchmarks/geometric_vcycle_reference_bench.cpp)
+target_link_libraries(gfss_geometric_vcycle_reference_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_geometric_vcycle_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_aggregation_coarse_space_bench benchmarks/aggregation_coarse_space_bench.cpp)
+target_link_libraries(gfss_aggregation_coarse_space_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_coarse_space_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_aggregation_coarse_operator_bench benchmarks/aggregation_coarse_operator_bench.cpp)
+target_link_libraries(gfss_aggregation_coarse_operator_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_coarse_operator_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_aggregation_coarse_storage_bench benchmarks/aggregation_coarse_storage_bench.cpp)
+target_link_libraries(gfss_aggregation_coarse_storage_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_coarse_storage_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_aggregation_two_grid_reference_bench benchmarks/aggregation_two_grid_reference_bench.cpp)
+target_link_libraries(gfss_aggregation_two_grid_reference_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_aggregation_two_grid_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(gfss_smoothed_aggregation_reference_bench benchmarks/smoothed_aggregation_reference_bench.cpp)
+target_link_libraries(gfss_smoothed_aggregation_reference_bench PRIVATE gfss_multigrid_reference)
+target_include_directories(gfss_smoothed_aggregation_reference_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(GFSS_BUILD_TESTS)
     enable_testing()
@@ -223,6 +284,26 @@ if(GFSS_BUILD_TESTS)
     target_link_libraries(gfss_cpu_gold_test PRIVATE gfss_core)
     add_test(NAME cpu_gold COMMAND gfss_cpu_gold_test)
 
+    add_executable(gfss_multilevel_reference_test tests/multilevel_reference_test.cpp)
+    target_link_libraries(gfss_multilevel_reference_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME multilevel_reference COMMAND gfss_multilevel_reference_test)
+
+    add_executable(gfss_aggregation_coarse_space_test tests/aggregation_coarse_space_test.cpp)
+    target_link_libraries(gfss_aggregation_coarse_space_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME aggregation_coarse_space COMMAND gfss_aggregation_coarse_space_test)
+
+    add_executable(gfss_aggregation_coarse_operator_test tests/aggregation_coarse_operator_test.cpp)
+    target_link_libraries(gfss_aggregation_coarse_operator_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME aggregation_coarse_operator COMMAND gfss_aggregation_coarse_operator_test)
+
+    add_executable(gfss_aggregation_two_grid_reference_test tests/aggregation_two_grid_reference_test.cpp)
+    target_link_libraries(gfss_aggregation_two_grid_reference_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME aggregation_two_grid_reference COMMAND gfss_aggregation_two_grid_reference_test)
+
+    add_executable(gfss_smoothed_aggregation_reference_test tests/smoothed_aggregation_reference_test.cpp)
+    target_link_libraries(gfss_smoothed_aggregation_reference_test PRIVATE gfss_multigrid_reference)
+    add_test(NAME smoothed_aggregation_reference COMMAND gfss_smoothed_aggregation_reference_test)
+
     if(GFSS_HAS_CUDA)
         add_executable(gfss_cuda_operator_test tests/cuda_operator_test.cpp)
         target_link_libraries(gfss_cuda_operator_test PRIVATE gfss_cuda_operator gfss_core)
@@ -231,6 +312,10 @@ if(GFSS_BUILD_TESTS)
         add_executable(gfss_gpu_pcg_test tests/gpu_pcg_test.cpp)
         target_link_libraries(gfss_gpu_pcg_test PRIVATE gfss_cuda_operator gfss_core)
         add_test(NAME gpu_pcg COMMAND gfss_gpu_pcg_test)
+
+        add_executable(gfss_gpu_pcg_seeded_test tests/gpu_pcg_seeded_test.cpp)
+        target_link_libraries(gfss_gpu_pcg_seeded_test PRIVATE gfss_cuda_operator gfss_core)
+        add_test(NAME gpu_pcg_seeded COMMAND gfss_gpu_pcg_seeded_test)
 
         add_executable(gfss_adaptive_refinement_test tests/adaptive_refinement_test.cpp)
         target_link_libraries(gfss_adaptive_refinement_test PRIVATE gfss_mixed_refinement)
