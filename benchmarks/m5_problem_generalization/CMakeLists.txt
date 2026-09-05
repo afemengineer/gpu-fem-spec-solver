@@ -47,7 +47,7 @@ target_include_directories(gfss_gpu_m5_recursive_sparse_tail_bench PRIVATE
 
 # Persistent recursive coarse-tail runtime validation.  The host builder exports
 # each non-bottom operator as dense FP32 or structural scalar CSR FP32 according
-# to the measured/memory crossover policy, and exports both P and P^T as CSR.
+# to the representation policy, and exports both P and P^T as CSR.
 add_executable(gfss_gpu_m5_recursive_tail_gpu_bench
     ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_recursive_tail_gpu_bench.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_recursive_tail.cu)
@@ -57,4 +57,20 @@ target_include_directories(gfss_gpu_m5_recursive_tail_gpu_bench PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../include
     ${CMAKE_CURRENT_LIST_DIR}/..)
 set_target_properties(gfss_gpu_m5_recursive_tail_gpu_bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF)
+
+# End-to-end production-candidate gate.  This keeps the validated L0/P0/L1/P1
+# persistent path but replaces fixed L2/L3 with the arbitrary-depth recursive
+# device context, and runs it inside the existing FP64 defect-correction policy.
+add_executable(gfss_gpu_m5_recursive_production_solver_bench
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_recursive_production_solver_bench.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gpu_m5_persistent_recursive_vpcg_staging.cu
+    ${CMAKE_CURRENT_LIST_DIR}/../../src/gpu_m5_recursive_tail_context.cu)
+target_link_libraries(gfss_gpu_m5_recursive_production_solver_bench PRIVATE
+    gfss_multigrid_reference CUDA::cudart CUDA::cublas)
+target_include_directories(gfss_gpu_m5_recursive_production_solver_bench PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../include
+    ${CMAKE_CURRENT_LIST_DIR}/../../src
+    ${CMAKE_CURRENT_LIST_DIR}/..)
+set_target_properties(gfss_gpu_m5_recursive_production_solver_bench PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF)
